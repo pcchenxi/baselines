@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 
 REWARD_NUM = 5
+MIN_RETURN = np.array([-1, 0, -200, -100, -1])
 class Model(object):
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, model_name, lr, need_summary = False):
@@ -16,20 +17,20 @@ class Model(object):
         train_model = policy(sess, ob_space, ac_space, REWARD_NUM, reuse=True, model_name = model_name)
 
         A = train_model.pdtype.sample_placeholder([None])
-        ADV = tf.placeholder(tf.float32, [None])
-        R = tf.placeholder(tf.float32, reward_size)
-        OLDNEGLOGPAC = tf.placeholder(tf.float32, [None])
-        OLDVPRED = tf.placeholder(tf.float32, reward_size)
-        LR = tf.placeholder(tf.float32, [])
-        CLIPRANGE = tf.placeholder(tf.float32, [])
+        ADV = tf.placeholder(tf.float32, [None], name='ph_adv')
+        RETRUN = tf.placeholder(tf.float32, reward_size, name='ph_R')
+        OLDNEGLOGPAC = tf.placeholder(tf.float32, [None], name='ph_old_neglogpac')
+        OLDVPRED = tf.placeholder(tf.float32, reward_size, name='ph_oldvpred')
+        LR = tf.placeholder(tf.float32, [], name='ph_lr')
+        CLIPRANGE = tf.placeholder(tf.float32, [], name='ph_cliprange')
 
         neglogpac = train_model.pd.neglogp(A)
         entropy = tf.reduce_mean(train_model.pd.entropy())
 
         vpred = train_model.vf
         vpredclipped = OLDVPRED + tf.clip_by_value(train_model.vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
-        vf_losses1 = tf.square(vpred - R)
-        vf_losses2 = tf.square(vpredclipped - R)
+        vf_losses1 = tf.square(vpred - RETRUN)
+        vf_losses2 = tf.square(vpredclipped - RETRUN)
         # vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
         vf_loss = tf.reduce_mean(vf_losses1)
 
@@ -42,6 +43,8 @@ class Model(object):
 
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
+
+        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
 
         with tf.variable_scope(model_name):
             params = tf.trainable_variables(scope=model_name)
@@ -62,39 +65,13 @@ class Model(object):
         # trainer = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         # _train = trainer.apply_gradients(grads)
 
-        def train(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, actions_suggest_list=[], advs_suggest_list=[], states=None):
+        def train(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None):
             # advs = np.clip(advs, -advs.max(), advs.max())
             advs = (advs - advs.mean()) / (advs.std() + 1e-8)
             # advs_suggest = advs_suggest / (advs_suggest.std() + 1e-8)
             # print('adv min max', advs.min(), advs.max())
 
-            # for actions_suggest, advs_suggest in zip(actions_suggest_list, advs_suggest_list):
-            #     positive_adv = []
-            #     for i in range(len(advs_suggest)):
-            #         if advs_suggest[i] > 0:
-            #             positive_adv.append(i)
-                
-                # if positive_adv != []:
-                #     advs_suggest_select = np.take(advs_suggest, positive_adv, axis=0)
-                #     advs_suggest_select = advs_suggest_select / (advs_suggest_select.std() + 1e-8)
-                #     advs_suggest_select = np.clip(advs_suggest_select, -10000, advs.max())
-                #     print('adv_suggest min max', advs_suggest_select.min(), advs_suggest_select.max(), len(advs_suggest_select))
-
-                #     # print(obs.shape, np.take(obs, positive_adv, axis=0).shape)
-                #     obs = np.concatenate((obs, np.take(obs, positive_adv, axis=0)), axis=0)
-                #     actions = np.concatenate((actions, np.take(actions_suggest, positive_adv, axis=0)), axis=0)
-                #     advs = np.concatenate((advs, advs_suggest_select), axis=0)
-                #     returns = np.concatenate((returns, np.take(returns, positive_adv, axis=0)), axis=0)
-                #     neglogpacs = np.concatenate((neglogpacs, np.take(neglogpacs, positive_adv, axis=0)), axis=0)
-                #     values = np.concatenate((values, np.take(values, positive_adv, axis=0)), axis=0)
-
-            # td_map_suggest = {train_model.X:obs, A:actions_suggest, ADV:advs_suggest, LR:lr,
-            #         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs}
-            # sess.run(train_a, td_map_suggest)
-
-            # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-
-            td_map = {train_model.X:obs, A:actions, ADV:advs, R:returns, LR:lr,
+            td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                     CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
             if states is not None:
                 td_map[train_model.S] = states
@@ -104,10 +81,39 @@ class Model(object):
                 [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a, train_v],
                 td_map                
             )[:-2]
-        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
+
+
+        def train_actor(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None):
+            # advs = np.clip(advs, -advs.max(), advs.max())
+            # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+
+            td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
+                    CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs}
+            if states is not None:
+                td_map[train_model.S] = states
+                td_map[train_model.M] = masks
+            # ratio_ = sess.run(ratio, td_map)
+            # print('ratio', ratio_)
+            return sess.run(
+                [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a],
+                td_map                
+            )[:-1]
+
+        def train_value(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None):
+            td_map = {train_model.X:obs, RETRUN:returns, LR:lr,
+                    CLIPRANGE:cliprange, OLDVPRED:values}
+            if states is not None:
+                td_map[train_model.S] = states
+                td_map[train_model.M] = masks
+
+            sess.run(train_v, td_map )
+
 
         def get_values(obs):
             return sess.run(vpred, {train_model.X:obs})
+
+        def get_neglogpac(obs, actions):
+            return sess.run(neglogpac, {train_model.X:obs, A:actions})
 
         def get_actions_dist(obs):
             return sess.run([train_model.sample, train_model.std], {train_model.X:obs})
@@ -126,15 +132,7 @@ class Model(object):
                 find_vf = p.name.find('vf')
                 if load_value == False and find_vf != -1:
                     continue
-                
-                # find_pi = p.name.find('pi')
-                # if find_pi != -1:
-                #     print(np.asarray(loaded_p).shape)
-                #     noise = np.random.normal(0, 0.005, np.asarray(loaded_p).shape)
-                # # if p.name.find('logstd') != -1:
-                # #     loaded_p = loaded_p + 0.2
-                #     print(p.name, find_vf)
-                #     loaded_p += noise
+
                 restores.append(p.assign(loaded_p))
             sess.run(restores)
 
@@ -142,20 +140,16 @@ class Model(object):
             print('loaded')
             # If you want to load weights, also save/load observation scaling inside VecNormalize
 
-        def load_value(load_path):
-            loaded_params = joblib.load(load_path)
+        def get_current_params():
+            net_params = sess.run(params)
+            return net_params 
+
+        def replace_params(loaded_params):
             restores = []
             for p, loaded_p in zip(params, loaded_params):
-                find_vf = p.name.find('vf')
-                if find_vf == -1:
-                    continue
-                print(p.name, find_vf)
                 restores.append(p.assign(loaded_p))
             sess.run(restores)
 
-            # saver.restore(sess, load_path + '.cptk')
-            print('loaded')
-            # If you want to load weights, also save/load observation scaling inside VecNormalize
 
         def write_summary(summary_name, value, step):
             summary = tf.Summary()
@@ -196,18 +190,22 @@ class Model(object):
             self.summary_writer.flush()
 
         self.train = train
+        self.train_actor = train_actor
+        self.train_value = train_value
         self.train_model = train_model
         self.act_model = act_model
         self.step = act_model.step
         self.step_max = act_model.step_max
         self.value = act_model.value
         self.get_values = get_values
+        self.get_neglogpac = get_neglogpac
         self.get_actions_dist = get_actions_dist
 
         self.initial_state = act_model.initial_state
         self.save = save
         self.load = load
-        self.load_value = load_value
+        self.replace_params = replace_params
+        self.get_current_params = get_current_params
 
         if need_summary:
             # self.summary_writer = tf.summary.FileWriter('../model/log', sess.graph)   
@@ -235,7 +233,8 @@ class Runner(object):
         self.states = model.initial_state
         self.dones = [False for _ in range(nenv)]
 
-    def run(self, is_test = False, use_deterministic = False):
+    def run(self, nsteps, is_test = False, use_deterministic = False):
+
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[]
         mb_infos = []
         mb_states = self.states
@@ -272,7 +271,8 @@ class Runner(object):
                     if rewards[i][0] > 0:  
                         rewards[i] += self.gamma*v_preds[i] 
                     else:
-                        rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
+                        # rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
+                        rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
                     # rewards[i] += self.gamma*v_preds[i] 
 
             if t%100 == 0:
@@ -303,15 +303,12 @@ class Runner(object):
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
         last_values = self.model.value(self.obs, self.states, self.dones)
 
-        # print('last', last_values)
         #discount/bootstrap off value fn
         mb_returns = np.zeros_like(mb_rewards)
         mb_advs = np.zeros_like(mb_rewards)
         mb_advs_pf = np.zeros_like(mb_rewards)
         lastgaelam = 0
 
-        # print('in runner',np.asarray(mb_rewards).shape)
-        # print('         ',np.asarray(mb_values).shape)
 
         for t in reversed(range(len(mb_values))):
             nextnonterminal = np.zeros(last_values.shape)
@@ -356,46 +353,99 @@ def constfn(val):
         return val
     return f
 
-def compute_advs(max_return, values, advs_ori, action_diff, action_std):
-    # towards to max point
-    dir_v = np.asarray(max_return - values)
-    dir_v_length = np.sqrt(np.sum(np.multiply(dir_v, dir_v), axis=1)) 
+def safemean(xs):
+    return np.nan if len(xs) == 0 else np.mean(xs)
 
-    advs_dir_norm = np.zeros_like(advs_ori)
-    for t in range(len(values)):
-        advs_dir_norm[t] = dir_v[t]/(dir_v_length[t] + 1e-8)
-    mean_dir = np.mean(advs_dir_norm, axis=0)
-    mean_dir_length = np.sqrt(np.sum(mean_dir*mean_dir))
-    print('norm dir', np.array_str(mean_dir, precision=3, suppress_small=True))
+def display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+                            rewards, returns, advs_ori, epinfobuf, model, logger):
+    lossvals = np.mean(mblossvals, axis=0)
+    if update % log_interval == 0 or update == 1:
+        # ev = explained_variance(values, returns)
+        logger.logkv("serial_timesteps", update*nsteps)
+        logger.logkv("nupdates", update)
+        logger.logkv("total_timesteps", update*nbatch)
+        # logger.logkv("explained_variance", float(ev))
+        # logger.logkv("return_mean", np.mean(returns))
+        logger.logkv('rew_mean', np.mean(rewards))
+        logger.logkv('eprewmean', safemean([epinfo['r'][-1] for epinfo in epinfobuf]))
+        logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
+        for (lossval, lossname) in zip(lossvals, model.loss_names):
+            logger.logkv(lossname, lossval)
+        logger.dumpkvs()
+        
+        step_label = update*nbatch
+        for i in range(REWARD_NUM):
+            model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
+            model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
+            model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)
+            # model.log_histogram('return_dist/return_'+str(i+1), returns[:,i], step_label)
+            model.log_histogram('adv_dist/adv_'+str(i+1), advs_ori[:,i], step_label)
+            
+            # model.write_summary('adv_mean/adv_'+str(i+1), advs_ori[:,i].mean(), step_label)
+            # model.write_summary('adv_std/adv_'+str(i+1), advs_ori[:,i].std(), step_label)
+            
+        model.write_summary('sum_rewards/score', safemean([epinfo['r'][-1] for epinfo in epinfobuf]), step_label)
+        model.write_summary('sum_rewards/mean_length', safemean([epinfo['l'] for epinfo in epinfobuf]), step_label)
 
-    # towards to max evaluation gradient
-    # grad_v = values * 1
-    grad_v = values * 1.1   
+        for (lossval, lossname) in zip(lossvals, model.loss_names):
+            model.write_summary('loss/'+lossname, lossval, step_label)
 
-    # for i in range(REWARD_NUM):
-    #     grad_v[:, i] = np.clip(grad_v[:, i], -10000, max_return[i])
-    grad_v = grad_v - values
-    grad_v_length = np.sqrt(np.sum(np.multiply(grad_v, grad_v), axis=1)) 
 
-    g_v = np.array([1, 1, 1, 1, 1])
-    g_v_length = np.sqrt(np.sum(g_v*g_v))
-    # advs_grad = np.sum(advs_ori, axis=1)/math.sqrt(REWARD_NUM)
+def nimibatch_update(   nbatch, noptepochs, nbatch_train,
+                        obs, returns, masks, actions, values, advs, neglogpacs,
+                        lrnow, cliprangenow, states, nsteps, model, update_type = 'all'):
+    mblossvals = []
+    if states is None: # nonrecurrent version
+        inds = np.arange(nbatch)
+        for ep in range(noptepochs):
+            # print('ep', ep)
+            np.random.shuffle(inds)
+            for start in range(0, nbatch, nbatch_train):
+                end = start + nbatch_train
+                mbinds = inds[start:end]
+                slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, advs, neglogpacs))
 
-    advs_dir = np.zeros(len(values))
-    advs_grad = np.zeros(len(values))
-    advs = np.zeros(len(values))
+                if update_type == 'all':
+                    losses = model.train(lrnow, cliprangenow, *slices)
+                    mblossvals.append(losses)
+                if update_type == 'actor':
+                    losses = model.train_actor(lrnow, cliprangenow, *slices)
+                    mblossvals.append(losses)                    
+                elif update_type == 'value':
+                    model.train_value(lrnow, cliprangenow, *slices)
+                    
+                # mblossvals.append(model.train(lrnow, cliprangenow, *slices))
+    else: # recurrent version
+        assert nenvs % nminibatches == 0
+        envsperbatch = nenvs // nminibatches
+        envinds = np.arange(nenvs)
+        flatinds = np.arange(nenvs * nsteps).reshape(nenvs, nsteps)
+        envsperbatch = nbatch_train // nsteps
+        for ep in range(noptepochs):
+            np.random.shuffle(envinds)
+            for start in range(0, nenvs, envsperbatch):
+                end = start + envsperbatch
+                mbenvinds = envinds[start:end]
+                mbflatinds = flatinds[mbenvinds].ravel()
+                slices = (arr[mbflatinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
+                mbstates = states[mbenvinds]
+                mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
+            
+    return mblossvals
+
+
+
+def compute_advs( advs_ori, dir_w):
+
+    dir_w_length = np.sqrt(np.sum(dir_w*dir_w))
+
+    advs_dir = np.zeros(len(advs_ori))
+    advs_grad = np.zeros(len(advs_ori))
+    advs = np.zeros(len(advs_ori))
     # advs_nrom = (advs_ori - np.mean(advs_ori, axis=0)) / (np.std(advs_ori, axis=0) + 1e-8)
 
-    for t in range(len(values)):
-        # advs_grad[t] = np.sum(np.multiply(advs_ori[t], grad_v[t]))/(grad_v_length[t] + 1e-8)
-        # advs_grad[t] = np.sum(np.multiply(advs_ori[t], g_v))/(g_v_length + 1e-8) # use 11111
-        advs_grad[t] = np.sum(np.multiply(advs_ori[t], mean_dir_length))/(mean_dir_length + 1e-8) # use max point
-        advs_dir[t] = np.sum(np.multiply(advs_ori[t], dir_v[t]))/(dir_v_length[t] + 1e-8)
+    for t in range(len(advs_ori)):
+        advs[t] = np.sum(np.multiply(advs_ori[t], dir_w))/(dir_w_length + 1e-8) # use 11111
 
-        advs[t] = 0.0 * advs_dir[t] + 1.0 * advs_grad[t]
-        if action_diff != []:
-            if np.all(action_diff[t] < action_std[t] * 0.6):
-                advs[t] = -1
-                # print(action_diff[t], action_std[t], advs[t])
-
+    advs = (advs - advs.mean()) / (advs.std() + 1e-8)
     return advs

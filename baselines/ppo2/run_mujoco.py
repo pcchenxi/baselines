@@ -13,7 +13,7 @@ def train(env_id, num_timesteps, seed):
     import gym, roboschool
     import tensorflow as tf
     from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
-    ncpu = 256
+    ncpu = 128
     config = tf.ConfigProto(allow_soft_placement=True,
                             intra_op_parallelism_threads=ncpu,
                             inter_op_parallelism_threads=ncpu)
@@ -32,7 +32,10 @@ def train(env_id, num_timesteps, seed):
 
     set_global_seeds(seed)
     policy = MlpPolicy
-    ppo2.learn(policy=policy, env=env, nsteps=int(512), nminibatches=int(4096),
+
+    nsteps = 128*64/ncpu
+
+    ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(2048),
         lam=0.95, gamma=[0.99, 0.99, 0.99, 0.99, 0.99], noptepochs=15, log_interval=1,
         ent_coef=0.0,
         lr=3e-4,

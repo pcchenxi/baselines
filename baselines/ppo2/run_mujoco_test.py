@@ -20,7 +20,7 @@ def train(env_id, num_timesteps, seed):
     tf.Session(config=config).__enter__()
     def make_env():
         #env = gym.make(env_id)
-        env = gym.make("RoboschoolHumanoidFlagrun-v1")
+        env = gym.make("RoboschoolHalfCheetah-v1")
         env = bench.Monitor(env, logger.get_dir(), render = True)
         return env
 

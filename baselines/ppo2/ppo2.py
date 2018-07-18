@@ -11,7 +11,6 @@ from baselines.common import explained_variance
 from baselines.ppo2.ratio_functions import *
 from baselines.ppo2.common_functions import *
 
-
 def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
@@ -36,26 +35,14 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef, lr = lr(1),
                     max_grad_norm=max_grad_norm, need_summary = need_summary)
 
-    if save_interval and logger.get_dir():
-        import cloudpickle
-        with open(osp.join(logger.get_dir(), 'make_model.pkl'), 'wb') as fh:
-            fh.write(cloudpickle.dumps(make_model))
-
     model = make_model('model', need_summary = True)
-    model_pf = make_model('model_pf', need_summary = False)
-    model_pf_2 = make_model('model_pf_2', need_summary = False)
 
     start_update = 0
 
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    
-    checkdir_pf = osp.join('../model', 'fun_models')
+    # checkdir = osp.join('../model', 'fun_models')
     mocel_path = osp.join(checkdir, '%.5i'%(start_update))
-    pf_path = checkdir_pf + '/hard_pushup_run2'
-    pf_path_2 = checkdir_pf + '/easy_good'
-
-    # model_pf.load(pf_path)
-    # model_pf_2.load(pf_path_2)
 
     if start_update != 0:
         model.load(mocel_path)
@@ -63,8 +50,6 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     # model.load_value(checkdir+'/00088')
 
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
-    epinfobuf = deque(maxlen=100)
-    tfirststart = time.time()
 
     nupdates = total_timesteps//nbatch
 
@@ -84,94 +69,109 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         print(lrnow, cliprangenow)
 
-        # lrnow = lr
-        # cliprangenow = cliprange
-        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(is_test=False) #pylint: disable=E0632
-        pi_mean, pi_std = model.get_actions_dist(obs)
-
+        # 1: sample batch using base policy
+        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(nsteps * 4, is_test=False) #pylint: disable=E0632
         advs_ori = returns - values
-        # advs = np.sum(advs_ori, axis=1)
-        # print(advs.shape)
-        advs = compute_advs(max_return, values, advs_ori, [], [])
 
-        # values_pf = model_pf.get_values(obs)
-        # actions_suggest, _ = model_pf.get_actions_dist(obs)
-        # adv_ori_suggest = values_pf - values
-        # advs_suggest = compute_advs(max_return, values, adv_ori_suggest, np.abs(pi_mean - actions_suggest), pi_std)
+        # mean_advs_ori = np.mean(advs_ori, axis = 0)
 
-        # values_pf_2 = model_pf_2.get_values(obs)
-        # actions_suggest_2, _ = model_pf_2.get_actions_dist(obs)
-        # adv_ori_suggest_2 = values_pf_2 - values
-        # advs_suggest_2 = compute_advs(max_return, values, adv_ori_suggest_2, np.abs(pi_mean - actions_suggest_2), pi_std)    
+        base_mean_returns = np.mean(returns, axis = 0)
 
-        epinfobuf.extend(epinfos)
-        mblossvals = []
-        if states is None: # nonrecurrent version
-            inds = np.arange(nbatch)
-            for ep in range(noptepochs):
-                print('ep', ep)
-                np.random.shuffle(inds)
-                for start in range(0, nbatch, nbatch_train):
-                    end = start + nbatch_train
-                    mbinds = inds[start:end]
-                    slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, advs, neglogpacs))
-                    losses = model.train(lrnow, cliprangenow, *slices)
-                    # losses = model.train(lrnow, cliprangenow, *slices, actions_suggest_list = [actions_suggest[mbinds]], advs_suggest_list = [advs_suggest[mbinds]])
-                    # losses = model.train(lrnow, cliprangenow, *slices, actions_suggest_list = [actions_suggest[mbinds], actions_suggest_2[mbinds]], advs_suggest_list = [advs_suggest[mbinds], advs_suggest_2[mbinds]])                    
-                    mblossvals.append(losses)
-                    # mblossvals.append(model.train(lrnow, cliprangenow, *slices))
-        else: # recurrent version
-            assert nenvs % nminibatches == 0
-            envsperbatch = nenvs // nminibatches
-            envinds = np.arange(nenvs)
-            flatinds = np.arange(nenvs * nsteps).reshape(nenvs, nsteps)
-            envsperbatch = nbatch_train // nsteps
-            for ep in range(noptepochs):
-                np.random.shuffle(envinds)
-                for start in range(0, nenvs, envsperbatch):
-                    end = start + envsperbatch
-                    mbenvinds = envinds[start:end]
-                    mbflatinds = flatinds[mbenvinds].ravel()
-                    slices = (arr[mbflatinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
-                    mbstates = states[mbenvinds]
-                    mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
+        # 2: update base value net
+        mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
+                        obs, returns, masks, actions, values, advs_ori, neglogpacs,
+                        lrnow, cliprangenow, states, nsteps, model, update_type = 'value')        
+        # 3: get base policy params
+        params_base = model.get_current_params()
 
-        lossvals = np.mean(mblossvals, axis=0)
-        tnow = time.time()
-        fps = int(nbatch / (tnow - tstart))
-        if update % log_interval == 0 or update == 1:
-            print(returns.shape)
-            # ev = explained_variance(values, returns)
-            logger.logkv("serial_timesteps", update*nsteps)
-            logger.logkv("nupdates", update)
-            logger.logkv("total_timesteps", update*nbatch)
-            logger.logkv("fps", fps)
-            # logger.logkv("explained_variance", float(ev))
-            # logger.logkv("return_mean", np.mean(returns))
-            logger.logkv('rew_mean', np.mean(rewards))
-            logger.logkv('eprewmean', safemean([epinfo['r'][-1] for epinfo in epinfobuf]))
-            logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
-            logger.logkv('time_elapsed', tnow - tfirststart)
-            for (lossval, lossname) in zip(lossvals, model.loss_names):
-                logger.logkv(lossname, lossval)
-            logger.dumpkvs()
-            
-            step_label = update*nbatch
-            for i in range(REWARD_NUM):
-                model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
-                model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
-                model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)
-                # model.log_histogram('return_dist/return_'+str(i+1), returns[:,i], step_label)
-                model.log_histogram('adv_dist/adv_'+str(i+1), advs_ori[:,i], step_label)
+        # 4: for loop:
+        obs_p_buf, returns_p_buf, masks_p_buf, actions_p_buf, rewards_p_buf, values_p_buf, neglogpacs_p_buf, states_p_buf = [], [], [], [], [], [], [], []
+        params_p_buf = []
+        advs_p_buf = []
+
+        for i in range(4): 
+            print('--------------------------------', i)
+            #   4.1: update base policy to a random direction
+
+            # random_w = np.random.rand(REWARD_NUM)
+            if i == 0:
+                random_w = np.array([1, 0, 0, 0, 0])
+            elif i == 1:
+                random_w = np.array([0, 1, 0, 0, 0])
+            elif i == 2:
+                random_w = np.array([0, 0, 1, 0, 0])
+            elif i == 3:
+                random_w = np.array([0, 0, 0, 1, 0])
+
+            print(' 4.1 update base policy', random_w)
+            # print(np.array_str(mean_advs_ori, precision=3, suppress_small=True))
+
+            advs = compute_advs(advs_ori, random_w)
+            mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
+                        obs, returns, masks, actions, values, advs, neglogpacs,
+                        lrnow, cliprangenow, states, nsteps, model, update_type = 'actor')       
+
+            #   4.2: sample batch
+            print(' 4.2 sample batch using updated policy')
+            obs_p, returns_p, masks_p, actions_p, values_p, rewards_p, neglogpacs_p, states_p, epinfos_p, _ = runner.run(nsteps, is_test=False) #pylint: disable=E0632
+            advs_p_ori = returns_p - values_p
+            advs_p = compute_advs(advs_p_ori, np.array([1,1,1,1,1]))
+            # print('adv mean and std', advs_p.mean(), advs_p.std())
+
+            mean_returns = np.mean(returns_p, axis = 0)
+            return_diff = mean_returns - base_mean_returns
+            print(np.array_str(return_diff, precision=3, suppress_small=True))
+
+            #   4.3: save updated policy and batch
+            print(' 4.3 save updated policy and batch')
+            if obs_p_buf == []:
+                obs_p_buf, returns_p_buf, masks_p_buf, actions_p_buf, rewards_p_buf, values_p_buf, neglogpacs_p_buf, states_p_buf, epinfos_p_buf = obs_p, returns_p, masks_p, actions_p, rewards_p, values_p, neglogpacs_p, states_p, epinfos_p
+                advs_p_buf = advs_p
+                # params_p_buf = model.get_current_params()
+            else:
+                obs_p_buf = np.concatenate((obs_p_buf, obs_p), axis = 0)
+                returns_p_buf = np.concatenate((returns_p_buf, returns_p), axis = 0)
+                masks_p_buf = np.concatenate((masks_p_buf, masks_p), axis = 0)
+                actions_p_buf = np.concatenate((actions_p_buf, actions_p), axis = 0)
+                rewards_p_buf = np.concatenate((rewards_p_buf, rewards_p), axis = 0)
+                neglogpacs_p_buf = np.concatenate((neglogpacs_p_buf, neglogpacs_p), axis = 0)
+                # states_p_buf = np.concatenate((states_p_buf, states_p), axis = 0)
+                advs_p_buf = np.concatenate((advs_p_buf, advs_p), axis = 0)
+                values_p_buf = np.concatenate((values_p_buf, values_p), axis = 0)
+                # params_p_buf = np.concatenate((params_p_buf, model.get_current_params()), axis = 0)
                 
-                # model.write_summary('adv_mean/adv_'+str(i+1), advs_ori[:,i].mean(), step_label)
-                # model.write_summary('adv_std/adv_'+str(i+1), advs_ori[:,i].std(), step_label)
-                
-            model.write_summary('sum_rewards/score', safemean([epinfo['r'][-1] for epinfo in epinfobuf]), step_label)
-            model.write_summary('sum_rewards/mean_length', safemean([epinfo['l'] for epinfo in epinfobuf]), step_label)
+            #   4.4: restore base policy params
+            print(' 4.4 restore base policy params', rewards_p.shape)
+            model.replace_params(params_base)
 
-            for (lossval, lossname) in zip(lossvals, model.loss_names):
-                model.write_summary('loss/'+lossname, lossval, step_label)
+        neglogpacs_p_buf = model.get_neglogpac(obs_p_buf, actions_p_buf)
+        # neglogpacs
+
+        mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
+                    obs_p_buf, returns_p_buf, masks_p_buf, actions_p_buf, values_p_buf, advs_p_buf, neglogpacs_p_buf,
+                    lrnow, cliprangenow, states, nsteps, model, update_type = 'actor')    
+
+        print('------------------- updated ------------------------------')
+
+        # 5: evaluate each policy
+        # 6: compute mata loss
+        # 7: update base policy
+
+        # # lrnow = lr
+        # # cliprangenow = cliprange
+        # obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(is_test=False) #pylint: disable=E0632
+        # # pi_mean, pi_std = model.get_actions_dist(obs)
+
+        # advs_ori = returns - values
+        # # advs = np.sum(advs_ori, axis=1)
+        # # print(advs.shape)
+        # advs = compute_advs(max_return, values, advs_ori, [], [])
+
+        # mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
+        #                 obs, returns, masks, actions, values, advs, neglogpacs,
+        #                 lrnow, cliprangenow, states, nsteps, model, update_type = 'all')
+        display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+                            rewards, returns, advs_ori, epinfos, model, logger)         
 
         if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
             #checkdir = osp.join(logger.get_dir(), 'checkpoints')
@@ -187,5 +187,3 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         first = False
     env.close()
 
-def safemean(xs):
-    return np.nan if len(xs) == 0 else np.mean(xs)

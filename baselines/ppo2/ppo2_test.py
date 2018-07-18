@@ -50,7 +50,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     checkdir = osp.join('../model', 'checkpoints')    
     checkdir_pf = osp.join('../model', 'fun_models')
     model_path = osp.join(checkdir, '%.5i'%(start_update))
-    pf_path = checkdir_pf + '/hard_pushup_run2'
+    pf_path = checkdir_pf + '/easy_good'
     # pf_path_2 = checkdir_pf + '/14'
 
     model.load(model_path)
@@ -82,7 +82,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         # lrnow = lr
         # cliprangenow = cliprange
-        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(is_test=True, use_deterministic=True) #pylint: disable=E0632
+        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(nsteps, is_test=True, use_deterministic=False) #pylint: disable=E0632
         pi_mean, pi_std = model.get_actions_dist(obs)
 
         advs_ori = returns - values
