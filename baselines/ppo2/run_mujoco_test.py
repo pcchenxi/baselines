@@ -21,7 +21,7 @@ def train(env_id, num_timesteps, seed):
     def make_env():
         #env = gym.make(env_id)
         env = gym.make("RoboschoolHalfCheetah-v1")
-        env = bench.Monitor(env, logger.get_dir(), render = True)
+        env = bench.Monitor(env, logger.get_dir(), allow_early_resets=True, render = True)
         return env
 
     envs = []

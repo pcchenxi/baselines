@@ -44,7 +44,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     model_pf = make_model('model_pf', need_summary = False)
     model_pf_2 = make_model('model_pf_2', need_summary = False)
 
-    start_update = 0   
+    start_update = 0
 
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    
@@ -86,12 +86,12 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         pi_mean, pi_std = model.get_actions_dist(obs)
 
         advs_ori = returns - values
-        advs = compute_advs(max_return, values, advs_ori, [], [])
+        # advs = compute_advs(max_return, values, advs_ori, [], [])
 
-        values_pf = model_pf.get_values(obs)
-        actions_suggest, _ = model_pf.get_actions_dist(obs)
-        adv_ori_suggest = values_pf - values
-        advs_suggest = compute_advs(max_return, values, adv_ori_suggest, np.abs(pi_mean - actions_suggest), pi_std)
+        # values_pf = model_pf.get_values(obs)
+        # actions_suggest, _ = model_pf.get_actions_dist(obs)
+        # adv_ori_suggest = values_pf - values
+        # advs_suggest = compute_advs(max_return, values, adv_ori_suggest, np.abs(pi_mean - actions_suggest), pi_std)
 
 
         # values_pf_2 = model_pf_2.get_values(obs)
@@ -99,21 +99,23 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         # adv_ori_suggest_2 = values_pf_2 - values
         # advs_suggest_2 = compute_advs(max_return, values, adv_ori_suggest_2)        
 
-        for t in range(len(returns)):
+        print (epinfos)
 
-            print(''
-            , advs[t]
-            , advs_suggest[t]
-            # , advs_suggest_2[t]
-            # , v_score_pf[t]
-            # , np.array_str(np.multiply(advs_ori[t], dir_v[t])/dir_v_length[t], precision=3, suppress_small=True) \
-            # , np.array_str(dir_v[t], precision=3, suppress_small=True) \
-            , np.array_str(values[t], precision=3, suppress_small=True) \
-            # # , np.array_str(ratios, precision=3, suppress_small=True) \
-            # # , np.array_str(ratios_mean, precision=3, suppress_small=True) \
-            , np.array_str(rewards[t], precision=3, suppress_small=True) \
-            , np.array_str(returns[t], precision=3, suppress_small=True) \
-            )
+        # for t in range(len(returns)):
+            # print(epinfos[t])
+        #     print(''
+        #     , advs[t]
+        #     , advs_suggest[t]
+        #     # , advs_suggest_2[t]
+        #     # , v_score_pf[t]
+        #     # , np.array_str(np.multiply(advs_ori[t], dir_v[t])/dir_v_length[t], precision=3, suppress_small=True) \
+        #     # , np.array_str(dir_v[t], precision=3, suppress_small=True) \
+        #     , np.array_str(values[t], precision=3, suppress_small=True) \
+        #     # # , np.array_str(ratios, precision=3, suppress_small=True) \
+        #     # # , np.array_str(ratios_mean, precision=3, suppress_small=True) \
+        #     , np.array_str(rewards[t], precision=3, suppress_small=True) \
+        #     , np.array_str(returns[t], precision=3, suppress_small=True) \
+        #     )
 
         # advs_normal = (advs - advs.mean()) / (advs.std() + 1e-8)
         epinfobuf.extend(epinfos)

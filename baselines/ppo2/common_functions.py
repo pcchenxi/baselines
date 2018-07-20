@@ -5,13 +5,30 @@ import tensorflow as tf
 
 REWARD_NUM = 5
 MIN_RETURN = np.array([-1, 0, -200, -100, -1])
+
+from tensorflow.python.client import device_lib
+
+# def get_available_gpus():
+#     local_device_protos = device_lib.list_local_devices()
+#     return [x.name for x in local_device_protos if x.device_type == 'GPU']
+
+# print (get_available_gpus())
+# print(tf.test.gpu_device_name())
+
 class Model(object):
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, model_name, lr, need_summary = False):
         
         reward_size = [None, REWARD_NUM]
         # reward_size = [None]
-        sess = tf.get_default_session()
+        config = tf.ConfigProto(
+            inter_op_parallelism_threads=1,
+            intra_op_parallelism_threads=1,
+            log_device_placement=False,
+            device_count = { "GPU": 1 } )
+        sess = tf.Session(config=config)
+
+        # sess = tf.get_default_session(config=config)
 
         act_model = policy(sess, ob_space, ac_space, REWARD_NUM, reuse=False, model_name = model_name)
         train_model = policy(sess, ob_space, ac_space, REWARD_NUM, reuse=True, model_name = model_name)
@@ -56,6 +73,15 @@ class Model(object):
         train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
         train_v = optimizer_v.minimize(loss_v, var_list=params_value)
 
+        network_params = []
+        for param in params:
+            layer_params = tf.placeholder(tf.float32, param.shape)
+            network_params.append(layer_params)
+
+        restores = []
+        for p, loaded_p in zip(params, network_params):
+            restores.append(p.assign(loaded_p))
+
         # loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
         # grads = tf.gradients(loss, params)
         # print(params, len(params))
@@ -85,7 +111,7 @@ class Model(object):
 
         def train_actor(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None):
             # advs = np.clip(advs, -advs.max(), advs.max())
-            # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+            advs = (advs - advs.mean()) / (advs.std() + 1e-8)
 
             td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                     CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs}
@@ -116,7 +142,7 @@ class Model(object):
             return sess.run(neglogpac, {train_model.X:obs, A:actions})
 
         def get_actions_dist(obs):
-            return sess.run([train_model.sample, train_model.std], {train_model.X:obs})
+            return sess.run([train_model.mean, train_model.std], {train_model.X:obs})
 
         def save(save_path, save_path_base):
             # saver.save(sess, save_path + '.cptk') 
@@ -145,11 +171,10 @@ class Model(object):
             return net_params 
 
         def replace_params(loaded_params):
-            restores = []
-            for p, loaded_p in zip(params, loaded_params):
-                restores.append(p.assign(loaded_p))
-            sess.run(restores)
-
+            # restores = []
+            # for p, loaded_p in zip(params, loaded_params):
+            #     restores.append(p.assign(loaded_p))
+            sess.run(restores, feed_dict={i: d for i, d in zip(network_params, loaded_params)})
 
         def write_summary(summary_name, value, step):
             summary = tf.Summary()
@@ -243,7 +268,7 @@ class Runner(object):
         t_s = time.time()
         ret = False
         # self.obs[:] = self.env.reset()
-        for t in range(self.nsteps):
+        for t in range(nsteps):
             if use_deterministic:
                 actions, values, self.states, neglogpacs = self.model.step_max(self.obs, self.states, self.dones)
             else:
@@ -271,12 +296,12 @@ class Runner(object):
                     if rewards[i][0] > 0:  
                         rewards[i] += self.gamma*v_preds[i] 
                     else:
-                        # rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
-                        rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
+                        rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
+                        # rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
                     # rewards[i] += self.gamma*v_preds[i] 
 
-            if t%100 == 0:
-                print(t/self.nsteps, time.time() - t_s)
+            # if t%100 == 0:
+            #     print(t/self.nsteps, time.time() - t_s)
             for info in infos:
                 maybeepinfo = info.get('episode')
                 if maybeepinfo: epinfos.append(maybeepinfo)
@@ -373,15 +398,16 @@ def display_updated_result( mblossvals, update, log_interval, nsteps, nbatch,
             logger.logkv(lossname, lossval)
         logger.dumpkvs()
         
-        step_label = update*nbatch
+        # step_label = update*nbatch
+        step_label = update
         for i in range(REWARD_NUM):
             model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
             model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
-            model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)
+            model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)\
             # model.log_histogram('return_dist/return_'+str(i+1), returns[:,i], step_label)
-            model.log_histogram('adv_dist/adv_'+str(i+1), advs_ori[:,i], step_label)
+            # model.log_histogram('adv_dist/adv_'+str(i+1), advs_ori[:,i], step_label)
             
-            # model.write_summary('adv_mean/adv_'+str(i+1), advs_ori[:,i].mean(), step_label)
+            # model.write_summary('mean_advs/adv_'+str(i+1), np.mean(advs_ori[:,i]), step_label)
             # model.write_summary('adv_std/adv_'+str(i+1), advs_ori[:,i].std(), step_label)
             
         model.write_summary('sum_rewards/score', safemean([epinfo['r'][-1] for epinfo in epinfobuf]), step_label)
@@ -396,7 +422,8 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
                         lrnow, cliprangenow, states, nsteps, model, update_type = 'all'):
     mblossvals = []
     if states is None: # nonrecurrent version
-        inds = np.arange(nbatch)
+        # inds = np.arange(nbatch)
+        inds = np.arange(len(obs))
         for ep in range(noptepochs):
             # print('ep', ep)
             np.random.shuffle(inds)
@@ -438,14 +465,37 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
 def compute_advs( advs_ori, dir_w):
 
     dir_w_length = np.sqrt(np.sum(dir_w*dir_w))
-
-    advs_dir = np.zeros(len(advs_ori))
-    advs_grad = np.zeros(len(advs_ori))
     advs = np.zeros(len(advs_ori))
+    advs_nrom = np.zeros_like(advs_ori)
     # advs_nrom = (advs_ori - np.mean(advs_ori, axis=0)) / (np.std(advs_ori, axis=0) + 1e-8)
+    # advs_nrom = advs_ori / (np.std(advs_ori, axis=0) + 1e-8)
+    # advs_max = np.abs(np.max(advs_ori, axis=0))
 
     for t in range(len(advs_ori)):
         advs[t] = np.sum(np.multiply(advs_ori[t], dir_w))/(dir_w_length + 1e-8) # use 11111
 
+        # print (np.array_str(advs_ori[t], precision=3, suppress_small=True) \
+        # , np.array_str(advs_nrom[t], precision=3, suppress_small=True) \
+        # , advs[t]
+        # )
+
     advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+    # advs = advs / (advs.std() + 1e-8)
+
+    # for t in range(len(advs_ori)):
+    #     print (np.array_str(advs_ori[t], precision=3, suppress_small=True) \
+    #     , np.array_str(advs_nrom[t], precision=3, suppress_small=True) \
+    #     , advs[t]
+    #     )
+
+    # print(dir_w)
+
+    return advs
+
+def compute_advs_singleobj(values, returns):
+    returns_single = np.sum(returns, axis = 1)
+    values_single = np.sum(values, axis = 1)
+
+    advs = returns_single - values_single
+
     return advs
