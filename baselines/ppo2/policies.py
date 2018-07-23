@@ -137,7 +137,7 @@ class MlpPolicy(object):
         X = tf.placeholder(tf.float32, ob_shape, name='Ob') #obs
         with tf.variable_scope(model_name, reuse=reuse):
             with tf.variable_scope('actor', reuse=reuse):
-                activ = tf.tanh
+                activ = tf.nn.relu
                 h1 = activ(fc(X, 'pi_fc1', nh=128, init_scale=np.sqrt(2)))
                 h2 = activ(fc(h1, 'pi_fc2', nh=64, init_scale=np.sqrt(2)))
                 pi = fc(h2, 'pi', actdim, init_scale=0.01)

@@ -20,7 +20,7 @@ def train(env_id, num_timesteps, seed):
     tf.Session(config=config).__enter__()
     def make_env():
         #env = gym.make(env_id)
-        env = gym.make("RoboschoolHalfCheetah-v1")
+        env = gym.make("RoboschoolAnt-v1")
         env = bench.Monitor(env, logger.get_dir(), allow_early_resets=True)
         return env
 
@@ -33,11 +33,11 @@ def train(env_id, num_timesteps, seed):
     set_global_seeds(seed)
     policy = MlpPolicy
 
-    nsteps = 128*512/ncpu
+    nsteps = 128*256/ncpu
 
     ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(4096),
-        lam=0.99, gamma=[0.99, 0.99, 0.99, 0.99, 0.99], noptepochs=15, log_interval=1,
-        ent_coef=0.0,
+        lam=0.99, gamma=[0.99, 0.99, 0.99, 0.99, 0.99], noptepochs=10, log_interval=1,
+        ent_coef=0.00,
         lr= 5e-4,
         cliprange=0.2,
         #total_timesteps=num_timesteps,

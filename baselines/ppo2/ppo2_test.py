@@ -44,7 +44,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     model_pf = make_model('model_pf', need_summary = False)
     model_pf_2 = make_model('model_pf_2', need_summary = False)
 
-    start_update = 0
+    start_update = 2
 
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    
@@ -82,7 +82,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         # lrnow = lr
         # cliprangenow = cliprange
-        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(nsteps, is_test=True, use_deterministic=False) #pylint: disable=E0632
+        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(nsteps, is_test=True, use_deterministic=True) #pylint: disable=E0632
         pi_mean, pi_std = model.get_actions_dist(obs)
 
         advs_ori = returns - values

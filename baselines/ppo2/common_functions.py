@@ -6,26 +6,21 @@ import tensorflow as tf
 REWARD_NUM = 5
 MIN_RETURN = np.array([-1, 0, -200, -100, -1])
 
-from tensorflow.python.client import device_lib
-
-# def get_available_gpus():
-#     local_device_protos = device_lib.list_local_devices()
-#     return [x.name for x in local_device_protos if x.device_type == 'GPU']
-
-# print (get_available_gpus())
-# print(tf.test.gpu_device_name())
-
 class Model(object):
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, model_name, lr, need_summary = False):
         
         reward_size = [None, REWARD_NUM]
         # reward_size = [None]
+        if need_summary:
+            use_gpu = 1
+        else:
+            use_gpu = 0
         config = tf.ConfigProto(
             inter_op_parallelism_threads=1,
             intra_op_parallelism_threads=1,
             log_device_placement=False,
-            device_count = { "GPU": 1 } )
+            device_count = { "GPU": use_gpu } )
         sess = tf.Session(config=config)
 
         # sess = tf.get_default_session(config=config)
@@ -68,71 +63,86 @@ class Model(object):
             params_actor = tf.trainable_variables(scope=model_name+'/actor')
             params_value = tf.trainable_variables(scope=model_name+'/value')
 
-        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
-        train_v = optimizer_v.minimize(loss_v, var_list=params_value)
-
-        network_params = []
+        network_params_all = []
         for param in params:
             layer_params = tf.placeholder(tf.float32, param.shape)
-            network_params.append(layer_params)
+            network_params_all.append(layer_params)
+        restores_all = []
+        for p, loaded_p in zip(params, network_params_all):
+            restores_all.append(p.assign(loaded_p))
 
-        restores = []
-        for p, loaded_p in zip(params, network_params):
-            restores.append(p.assign(loaded_p))
+        network_params_actor = []
+        for param in params_actor:
+            layer_params = tf.placeholder(tf.float32, param.shape)
+            network_params_actor.append(layer_params)
+        restores_actor = []
+        for p, loaded_p in zip(params_actor, network_params_actor):
+            restores_actor.append(p.assign(loaded_p))
 
-        # loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
-        # grads = tf.gradients(loss, params)
-        # print(params, len(params))
-        # if max_grad_norm is not None:
-        #     grads, _grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
-        # grads = list(zip(grads, params))
-        # trainer = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        # _train = trainer.apply_gradients(grads)
+        network_params_value = []
+        for param in params_value:
+            layer_params = tf.placeholder(tf.float32, param.shape)
+            network_params_value.append(layer_params)
+        restores_value = []
+        for p, loaded_p in zip(params_value, network_params_value):
+            restores_value.append(p.assign(loaded_p)) 
 
-        def train(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None):
-            # advs = np.clip(advs, -advs.max(), advs.max())
-            advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+
+        grads_a = tf.gradients(loss_a, params_actor)
+        grads_v = tf.gradients(loss_v, params_value)
+        max_grad_norm = 10
+        if max_grad_norm is not None:
+            grads_a, _grad_norm = tf.clip_by_global_norm(grads_a, max_grad_norm)
+            grads_v, _grad_norm = tf.clip_by_global_norm(grads_v, max_grad_norm)
+        grads_a = list(zip(grads_a, params_actor))
+        grads_v = list(zip(grads_v, params_value))
+        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        train_a = optimizer_a.apply_gradients(grads_a)
+
+        # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
+        train_v = optimizer_v.minimize(loss_v, var_list=params_value)
+
+        def train(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None, train_type='all'):
             # advs_suggest = advs_suggest / (advs_suggest.std() + 1e-8)
-            # print('adv min max', advs.min(), advs.max())
 
-            td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
-                    CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
-            if states is not None:
-                td_map[train_model.S] = states
-                td_map[train_model.M] = masks
+            if train_type == 'all':
+                advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+                td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
+                        CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
+                if states is not None:
+                    td_map[train_model.S] = states
+                    td_map[train_model.M] = masks
 
-            return sess.run(
-                [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a, train_v],
-                td_map                
-            )[:-2]
+                return sess.run(
+                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a, train_v],
+                    td_map                
+                )[:-2]
+            elif train_type == 'actor':
+                advs = (advs - advs.mean()) / (advs.std() + 1e-8)
 
+                td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
+                        CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
+                if states is not None:
+                    td_map[train_model.S] = states
+                    td_map[train_model.M] = masks
+                # ratio_ = sess.run(ratio, td_map)
+                # print('ratio', ratio_)
+                return sess.run(
+                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a],
+                    td_map                
+                )[:-1]
+            elif train_type == 'value':
+                td_map = {train_model.X:obs, RETRUN:returns, LR:lr,
+                        CLIPRANGE:cliprange, OLDVPRED:values}
+                if states is not None:
+                    td_map[train_model.S] = states
+                    td_map[train_model.M] = masks
 
-        def train_actor(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None):
-            # advs = np.clip(advs, -advs.max(), advs.max())
-            advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-
-            td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
-                    CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs}
-            if states is not None:
-                td_map[train_model.S] = states
-                td_map[train_model.M] = masks
-            # ratio_ = sess.run(ratio, td_map)
-            # print('ratio', ratio_)
-            return sess.run(
-                [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a],
-                td_map                
-            )[:-1]
-
-        def train_value(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None):
-            td_map = {train_model.X:obs, RETRUN:returns, LR:lr,
-                    CLIPRANGE:cliprange, OLDVPRED:values}
-            if states is not None:
-                td_map[train_model.S] = states
-                td_map[train_model.M] = masks
-
-            sess.run(train_v, td_map )
+                sess.run(train_v, td_map )
+            else:
+                print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! wrong train_type !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
 
         def get_values(obs):
@@ -166,15 +176,23 @@ class Model(object):
             print('loaded')
             # If you want to load weights, also save/load observation scaling inside VecNormalize
 
-        def get_current_params():
-            net_params = sess.run(params)
-            return net_params 
+        def get_current_params(params_type = 'all'):
+            if params_type == 'all':
+                net_params = sess.run(params)
+            elif params_type == 'actor':
+                net_params = sess.run(params_actor)
+            elif params_type == 'value':
+                net_params = sess.run(params_value)
 
-        def replace_params(loaded_params):
-            # restores = []
-            # for p, loaded_p in zip(params, loaded_params):
-            #     restores.append(p.assign(loaded_p))
-            sess.run(restores, feed_dict={i: d for i, d in zip(network_params, loaded_params)})
+            return np.asarray(net_params)
+
+        def replace_params(loaded_params, params_type = 'all'):
+            if params_type == 'all':
+                sess.run(restores_all, feed_dict={i: d for i, d in zip(network_params_all, loaded_params)})
+            elif params_type == 'actor':
+                sess.run(restores_actor, feed_dict={i: d for i, d in zip(network_params_actor, loaded_params)})
+            elif params_type == 'value':
+                sess.run(restores_value, feed_dict={i: d for i, d in zip(network_params_value, loaded_params)})
 
         def write_summary(summary_name, value, step):
             summary = tf.Summary()
@@ -215,8 +233,6 @@ class Model(object):
             self.summary_writer.flush()
 
         self.train = train
-        self.train_actor = train_actor
-        self.train_value = train_value
         self.train_model = train_model
         self.act_model = act_model
         self.step = act_model.step
@@ -317,7 +333,7 @@ class Runner(object):
                     print('score', infos[-1]['episode']['r'])
                     break
 
-        print(1, time.time() - t_s, len(mb_rewards))
+        # print(1, time.time() - t_s, len(mb_rewards))
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
@@ -334,7 +350,6 @@ class Runner(object):
         mb_advs_pf = np.zeros_like(mb_rewards)
         lastgaelam = 0
 
-
         for t in reversed(range(len(mb_values))):
             nextnonterminal = np.zeros(last_values.shape)
             if t == len(mb_values) - 1:
@@ -348,20 +363,6 @@ class Runner(object):
 
             mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
         mb_returns = mb_advs + mb_values
-
-        # if is_test:
-        #     for t in range(len(mb_returns)):
-        #         print(''
-        #         # , advs[t]
-        #         # , v_score[t]
-        #         # , ret_score[t]
-        #         # , v_score_pf[t]
-        #         # , ret_score_final[t]
-        #         , np.array_str(mb_returns[t], precision=3, suppress_small=True) \
-        #         # # , np.array_str(ratios, precision=3, suppress_small=True) \
-        #         # # , np.array_str(ratios_mean, precision=3, suppress_small=True) \
-        #         , np.array_str(advs[t], precision=3, suppress_small=True) \
-        #         )
 
         return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_rewards, mb_neglogpacs)),
             mb_states, epinfos, ret)
@@ -385,18 +386,18 @@ def display_updated_result( mblossvals, update, log_interval, nsteps, nbatch,
                             rewards, returns, advs_ori, epinfobuf, model, logger):
     lossvals = np.mean(mblossvals, axis=0)
     if update % log_interval == 0 or update == 1:
-        # ev = explained_variance(values, returns)
-        logger.logkv("serial_timesteps", update*nsteps)
-        logger.logkv("nupdates", update)
-        logger.logkv("total_timesteps", update*nbatch)
-        # logger.logkv("explained_variance", float(ev))
-        # logger.logkv("return_mean", np.mean(returns))
-        logger.logkv('rew_mean', np.mean(rewards))
-        logger.logkv('eprewmean', safemean([epinfo['r'][-1] for epinfo in epinfobuf]))
-        logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
-        for (lossval, lossname) in zip(lossvals, model.loss_names):
-            logger.logkv(lossname, lossval)
-        logger.dumpkvs()
+        # # ev = explained_variance(values, returns)
+        # logger.logkv("serial_timesteps", update*nsteps)
+        # logger.logkv("nupdates", update)
+        # logger.logkv("total_timesteps", update*nbatch)
+        # # logger.logkv("explained_variance", float(ev))
+        # # logger.logkv("return_mean", np.mean(returns))
+        # logger.logkv('rew_mean', np.mean(rewards))
+        # logger.logkv('eprewmean', safemean([epinfo['r'][-1] for epinfo in epinfobuf]))
+        # logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
+        # for (lossval, lossname) in zip(lossvals, model.loss_names):
+        #     logger.logkv(lossname, lossval)
+        # logger.dumpkvs()
         
         # step_label = update*nbatch
         step_label = update
@@ -432,16 +433,9 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
                 mbinds = inds[start:end]
                 slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, advs, neglogpacs))
 
-                if update_type == 'all':
-                    losses = model.train(lrnow, cliprangenow, *slices)
-                    mblossvals.append(losses)
-                if update_type == 'actor':
-                    losses = model.train_actor(lrnow, cliprangenow, *slices)
-                    mblossvals.append(losses)                    
-                elif update_type == 'value':
-                    model.train_value(lrnow, cliprangenow, *slices)
+                losses = model.train(lrnow, cliprangenow, *slices, train_type=update_type)
+                mblossvals.append(losses)
                     
-                # mblossvals.append(model.train(lrnow, cliprangenow, *slices))
     else: # recurrent version
         assert nenvs % nminibatches == 0
         envsperbatch = nenvs // nminibatches
@@ -466,7 +460,7 @@ def compute_advs( advs_ori, dir_w):
 
     dir_w_length = np.sqrt(np.sum(dir_w*dir_w))
     advs = np.zeros(len(advs_ori))
-    advs_nrom = np.zeros_like(advs_ori)
+    # advs_nrom = np.zeros_like(advs_ori)
     # advs_nrom = (advs_ori - np.mean(advs_ori, axis=0)) / (np.std(advs_ori, axis=0) + 1e-8)
     # advs_nrom = advs_ori / (np.std(advs_ori, axis=0) + 1e-8)
     # advs_max = np.abs(np.max(advs_ori, axis=0))
@@ -479,7 +473,7 @@ def compute_advs( advs_ori, dir_w):
         # , advs[t]
         # )
 
-    advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+    # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
     # advs = advs / (advs.std() + 1e-8)
 
     # for t in range(len(advs_ori)):

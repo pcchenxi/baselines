@@ -73,173 +73,153 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         # nbatch_train = nbatch // nminibatches
         nbatch_train = nminibatches    
         tstart = time.time()
-        frac = 1.0 - (update - 1.0) / nupdates
-        # lrnow = frac*lr(frac)
-        lrnow = lr
-        cliprangenow = cliprange(frac)
 
-        # lrnow = np.clip(lrnow, 1e-4, 1)
-        # cliprangenow = np.clip(cliprangenow, 0.1, 1)
+        # save the base policy params
+        params_actor_base = model.get_current_params(params_type='actor')
+        params_value_base = model.get_current_params(params_type='value')
 
-        print('lr', lrnow, cliprangenow)
-
-
-        # 1: sample batch using base policy
-        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(nsteps, is_test=False) #pylint: disable=E0632
-        advs_ori = returns - values
-        print('base batch size', values.shape)
-        # mean_advs_ori = np.mean(advs_ori, axis = 0)
-        base_mean_returns = np.mean(returns, axis = 0)     
-
-        # advs = compute_advs(advs_ori, np.asarray([1, -1, 1, 1, 1]))
-        # # advs = compute_advs_singleobj(values, returns)
-        # mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
-        #                 obs, returns, masks, actions, values, advs, neglogpacs,
-        #                 lrnow, cliprangenow, states, nsteps, model, update_type = 'all')    
-
-
-        # # 2: update base value net
-        # mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
-        #                 obs, returns, masks, actions, values, advs_ori, neglogpacs,
-        #                 lrnow, cliprangenow, states, nsteps, model, update_type = 'value')   
-
-
-
-        # 3: get base policy params
-        params_base = model.get_current_params()
-
-        # 4: meta loop:
-        obs_p_buf, returns_p_buf, masks_p_buf, actions_p_buf, rewards_p_buf, values_p_buf, neglogpacs_p_buf, states_p_buf, advs_p_buf = [], [], [], [], [], [], [], [], []
-        obs_buf, returns_buf, masks_buf, actions_buf, rewards_buf, values_buf, neglogpacs_buf, states_buf, advs_buf = [], [], [], [], [], [], [], [], []
-
-        buffers_p = [obs_p_buf, returns_p_buf, masks_p_buf, actions_p_buf, rewards_p_buf, values_p_buf, neglogpacs_p_buf, states_p_buf, advs_p_buf]
-        buffers_base = [obs_buf, returns_buf, masks_buf, actions_buf, rewards_buf, values_buf, neglogpacs_buf, states_buf, advs_buf]
-
-        params_p_buf = []
+        # prepare gradient buffer
+        delta_actor_buff = []
+        delta_value_buff = []
 
         vote_1, vote_2 = 0, 0
+        
+        # # 1: sample batch using base policy
+        # print(' ** 1. collect batch using base policy with size', nsteps*nenvs)
+        # obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+        # advs_ori = returns - values
+        # base_mean_returns = np.mean(returns, axis = 0)     
+        # print('    base batch collected', values.shape)
+
+        # advs = compute_advs(advs_ori, np.array([0, -1, 0, 0, 0]))
+
+        # lr_p, cr_p = 5e-4, 0.2
+        # mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+        #                                 obs, returns, masks, actions, values, advs, neglogpacs,
+        #                                 lr_p, cr_p, states, nsteps, model, update_type = 'all')       
+        # display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+        #                     rewards, returns, advs, epinfos, model, logger)   
 
         for i in range(2): 
-            print('--------------------------------', i)
-            # # 1: sample batch using base policy
-            # print('collect batch using base policy')
-            # obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
-            # advs_ori = returns - values
-            # base_mean_returns = np.mean(returns, axis = 0)     
-            # print('base batch size', values.shape)
-            # #   4.1: update base policy to a random direction
+            print('--------------------------------', i, '--------------------------------')
+            # 1: sample batch using base policy
+            print(' ***** 1. collect batch using base policy with size', nsteps*nenvs)
+            obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+            advs_ori = returns - values
+            base_mean_returns = np.mean(returns, axis = 0)     
+            print('    base batch collected', values.shape)
 
+
+
+
+            # 2: update base policy to a random direction
             # random_w = np.random.rand(REWARD_NUM)
-            print (vote_1, vote_2)
 
             if i%2 == 0:
-                random_w_p = np.array([0, 1, 0, 0, 0])
-                random_w = np.array([1, 1, 1, 1, 1])
+                random_w = np.array([0, 1, 0, 0, 0])
+                # random_w = np.array([0.1, 1, 0.1, 0.1, 0.1])
             elif i%2 != 0:
-                random_w_p = np.array([0, -1, 0, 0, 0])
-                random_w = np.array([1, -1, 1, 1, 1])
-            # if i > 10 and vote_1 < -vote_2:
-            #     random_w = np.array([0, 1, 0, 1, 0])
-            # if i > 10 and vote_1 > -vote_2:
-            #     random_w = np.array([0, -1, 0, 1, 0])
-            # elif i == 2:
-            #     random_w = np.array([0, 0, 1, 0, 0])
-            # elif i == 3:
-            #     random_w = np.array([0, 0, 0, 1, 0])
+                random_w = np.array([0, -1, 0, 0, 0])
+                # random_w = np.array([0.1, -1, 0.1, 0.1, 0.1])
 
-            print(' 4.1 update base policy', random_w)
-            # print(np.array_str(mean_advs_ori, precision=3, suppress_small=True))
+            lr_p, cr_p = 0.001, 0.2
+            print(' ***** 2 update base policy using --w', random_w, ' --alpha: lr', lr_p, ' --clip range', cr_p, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
+            advs = compute_advs(advs_ori, random_w)
+            mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+                                            obs, returns, masks, actions, values, advs, neglogpacs,
+                                            lr_p, cr_p, states, nsteps, model, update_type = 'all')       
+            params_actor_p = model.get_current_params(params_type='actor')
+            params_value_p = model.get_current_params(params_type='value')
 
-            # lr_p = 0.001
-            advs = compute_advs(advs_ori, random_w_p)
 
-            mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
-                        obs, returns, masks, actions, values, advs, neglogpacs,
-                        lrnow, cliprangenow*2, states, nsteps, model, update_type = 'actor')       
 
-            if (update % save_interval == 0 or first) and i%2 == 0:
-                checkdir = osp.join('../model', 'checkpoints')
-                savepath_base = osp.join(checkdir, '%.5i'%(1))
-                print('Saving to', savepath_base, savepath_base)
-                model.save(savepath_base, savepath_base)
-            if (update % save_interval == 0 or first) and i%2 != 0:
-                checkdir = osp.join('../model', 'checkpoints')
-                savepath_base = osp.join(checkdir, '%.5i'%(2))
-                print('Saving to', savepath_base, savepath_base)
-                model.save(savepath_base, savepath_base)
 
-            #   4.2: sample batch
-            print(' 4.2 sample batch using updated policy')
+            #   3: sample new batch
+            print(' ***** 3 sample batch using updated policy with size', nsteps*nenvs)
             obs_p, returns_p, masks_p, actions_p, values_p, rewards_p, neglogpacs_p, states_p, epinfos_p, _ = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+            advs_p_ori = returns_p - values_p
+            advs_p = compute_advs(advs_p_ori, random_w)
+            print('    updated batch collected', values_p.shape)
+            mean_returns = np.mean(returns_p, axis = 0)
+            print('    ', np.array_str(mean_returns, precision=3, suppress_small=True))
 
-            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            # update value network using the new batchs to compute advs which make sense for all objectives
-            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
-                        obs_p, returns_p, masks_p, actions_p, values_p, advs, neglogpacs,
-                        lrnow, cliprangenow, states, nsteps, model, update_type = 'values')  
-            values_p = model.get_values(obs_p)
 
+
+
+            # update using new batch
+            lr_s, cr_s = 0.0005, 0.2
+            print(' ***** 4 update policy the second time', random_w, ' --beta: lr', lr_s, ' --clip range', cr_s, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
+            mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+                                            obs_p, returns_p, masks_p, actions_p, values_p, advs_p, neglogpacs_p,
+                                            lr_s, cr_s, states, nsteps, model, update_type = 'all') 
+
+
+
+
+
+            obs_e, returns_e, masks_e, actions_e, values_e, rewards_e, neglogpacs_e, states_e, epinfos_e, _ = runner.run(int(100), is_test=False, use_deterministic=True) #pylint: disable=E0632
+            print('    evaluating policy', )
+
+            # for displaying one step updated returns
             if i%2 == 0:
                 for r_index in range(REWARD_NUM):
-                    model.write_summary('meta_f/mean_ret'+str(r_index+1), np.mean(returns_p[:,r_index]), update)
+                    model.write_summary('meta_f/mean_ret'+str(r_index+1), np.mean(returns_e[:,r_index]), update)
             else:
                 for r_index in range(REWARD_NUM):
-                    model.write_summary('meta_b/mean_ret'+str(r_index+1), np.mean(returns_p[:,r_index]), update)
+                    model.write_summary('meta_b/mean_ret'+str(r_index+1), np.mean(returns_e[:,r_index]), update)
+                    
+            display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+                                rewards_p, returns_p, advs_p, epinfos_p, model, logger)   
 
-            advs_p_ori = returns_p - values_p
-            advs_p_ori = advs_p_ori/2
-            advs_p_ori[:,1] = advs_p_ori[:,1]*2
 
-            advs_p = compute_advs(advs_p_ori, random_w)
-            print('updated batch size', values_p.shape)
 
-            # print('adv mean and std', advs_p.mean(), advs_p.std())
 
-            mean_returns = np.mean(returns_p, axis = 0)
-            return_diff = mean_returns - base_mean_returns
+            # compute delta
+            print(' ***** 5 compute and save dalta')
+            delta_actor_params = model.get_current_params(params_type='actor') - params_actor_p
+            delta_value_params = model.get_current_params(params_type='value') - params_value_base
+            # delta_value_params = params_value_p - params_value_base
 
-            if i%2 == 0:
-                vote_1 += return_diff[1]
-            if i%2 != 0:
-                vote_2 += return_diff[1]
-            print(np.array_str(return_diff, precision=3, suppress_small=True))
+            delta_actor_buff.append(delta_actor_params)
+            delta_value_buff.append(delta_value_params)
+            
+            # save the one step updated models
+            if (update % save_interval == 0 or first) and i == 0:
+                checkdir = osp.join('../model', 'checkpoints')
+                savepath_base = osp.join(checkdir, '%.5i'%(1))
+                print('    Saving to', savepath_base, savepath_base)
+                model.save(savepath_base, savepath_base)
+            if (update % save_interval == 0 or first) and i == 1:
+                checkdir = osp.join('../model', 'checkpoints')
+                savepath_base = osp.join(checkdir, '%.5i'%(2))
+                print('    Saving to', savepath_base, savepath_base)
+                model.save(savepath_base, savepath_base)
 
-            #   4.3: save updated batch
-            datas_p = [obs_p, returns_p, masks_p, actions_p, rewards_p, values_p, neglogpacs_p, states_p, advs_p]
-            datas_base = [obs, returns, masks, actions, rewards, values, neglogpacs, states, advs]
 
-            obs_p_buf, returns_p_buf, masks_p_buf, actions_p_buf, rewards_p_buf, values_p_buf, neglogpacs_p_buf, states_p_buf, advs_p_buf = stack_values(buffers_p, datas_p)
-            obs_buf, returns_buf, masks_buf, actions_buf, rewards_buf, values_buf, neglogpacs_buf, states_buf, advs_buf = stack_values(buffers_base, datas_base)
 
-            #   4.4: restore base policy params
-            model.replace_params(params_base)
 
-            # mean_a, std_a = model.get_actions_dist(obs)
-            # print(mean_a)
+            #   6: restore base policy params
+            print (' ***** 6 restore base policy params')
+            model.replace_params(params_actor_base, params_type='actor')
+            model.replace_params(params_value_base, params_type='value')     
+                   
+            # print(params_actor_base - model.get_current_params(params_type='actor'))
 
-        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! re-compute old probs and values
-        neglogpacs_p_buf = model.get_neglogpac(obs_p_buf, actions_p_buf)
-        values_p_buf = model.get_values(obs_p_buf)
 
-        # neglogpacs
-        print(rewards_buf.shape, rewards_p_buf.shape)
 
-        # update base value net
-        # mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
-        #                 obs_buf, returns_buf, masks_buf, actions_buf, values_buf, advs_buf, neglogpacs_p_buf,
-        #                 lrnow, cliprangenow, states, nsteps, model, update_type = 'value')   
-        
-        # update base actor net
-        mblossvals = nimibatch_update(   nbatch, noptepochs, nbatch_train,
-                    obs_p_buf, returns_p_buf, masks_p_buf, actions_p_buf, values_p_buf, advs_p_buf, neglogpacs_p_buf,
-                    lrnow, cliprangenow, states, nsteps, model, update_type = 'all')    
 
-        print('mean advs', np.mean(advs_p_buf, axis=0))
-        print('------------------- updated ------------------------------')
+        print(' ***** 7 sum all delta params ----')
+        sum_delta_actor = np.sum(delta_actor_buff, axis=0)
+        sum_delta_value = np.sum(delta_value_buff, axis=0)
 
-        display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
-                            rewards_buf, returns_p_buf, advs_p_buf, epinfos, model, logger)         
+        print(' ***** 8 update policy -----')
+        update_params_actor = params_actor_base + sum_delta_actor
+        update_params_value = params_value_base + sum_delta_value
+
+        model.replace_params(update_params_actor, params_type='actor')
+        model.replace_params(update_params_value, params_type='value')
+
+        print('\n') 
 
         if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
             #checkdir = osp.join(logger.get_dir(), 'checkpoints')
