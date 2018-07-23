@@ -127,33 +127,34 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             advs = compute_advs(advs_ori, random_w)
             mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
                                             obs, returns, masks, actions, values, advs, neglogpacs,
-                                            lr_p, cr_p, states, nsteps, model, update_type = 'all')       
+                                            lr_p, cr_p, states, nsteps, model, update_type = 'actor')       
             params_actor_p = model.get_current_params(params_type='actor')
             params_value_p = model.get_current_params(params_type='value')
 
 
 
-
-            #   3: sample new batch
-            print(' ***** 3 sample batch using updated policy with size', nsteps*nenvs)
-            obs_p, returns_p, masks_p, actions_p, values_p, rewards_p, neglogpacs_p, states_p, epinfos_p, _ = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
-            advs_p_ori = returns_p - values_p
-            advs_p = compute_advs(advs_p_ori, random_w)
-            print('    updated batch collected', values_p.shape)
-            mean_returns = np.mean(returns_p, axis = 0)
-            print('    ', np.array_str(mean_returns, precision=3, suppress_small=True))
-
-
+            for _ in range(10):
+                #   3: sample new batch
+                print(' ***** 3 sample batch using updated policy with size', nsteps*nenvs)
+                obs_p, returns_p, masks_p, actions_p, values_p, rewards_p, neglogpacs_p, states_p, epinfos_p, _ = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+                advs_p_ori = returns_p - values_p
+                advs_p = compute_advs(advs_p_ori, random_w)
+                print('    updated batch collected', values_p.shape)
+                mean_returns = np.mean(returns_p, axis = 0)
+                print('    ', np.array_str(mean_returns, precision=3, suppress_small=True))
 
 
-            # update using new batch
-            lr_s, cr_s = 0.0005, 0.2
-            print(' ***** 4 update policy the second time', random_w, ' --beta: lr', lr_s, ' --clip range', cr_s, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
-            mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
-                                            obs_p, returns_p, masks_p, actions_p, values_p, advs_p, neglogpacs_p,
-                                            lr_s, cr_s, states, nsteps, model, update_type = 'all') 
 
 
+                # update using new batch
+                lr_s, cr_s = 0.0005, 0.2
+                print(' ***** 4 update policy the second time', random_w, ' --beta: lr', lr_s, ' --clip range', cr_s, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
+                mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+                                                obs_p, returns_p, masks_p, actions_p, values_p, advs_p, neglogpacs_p,
+                                                lr_s, cr_s, states, nsteps, model, update_type = 'all') 
+
+                display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+                                    rewards_p, returns_p, advs_p, epinfos_p, model, logger)   
 
 
 
@@ -168,8 +169,6 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                 for r_index in range(REWARD_NUM):
                     model.write_summary('meta_b/mean_ret'+str(r_index+1), np.mean(returns_e[:,r_index]), update)
                     
-            display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
-                                rewards_p, returns_p, advs_p, epinfos_p, model, logger)   
 
 
 

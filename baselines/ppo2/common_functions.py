@@ -88,20 +88,20 @@ class Model(object):
             restores_value.append(p.assign(loaded_p)) 
 
 
-        grads_a = tf.gradients(loss_a, params_actor)
-        grads_v = tf.gradients(loss_v, params_value)
-        max_grad_norm = 10
-        if max_grad_norm is not None:
-            grads_a, _grad_norm = tf.clip_by_global_norm(grads_a, max_grad_norm)
-            grads_v, _grad_norm = tf.clip_by_global_norm(grads_v, max_grad_norm)
-        grads_a = list(zip(grads_a, params_actor))
-        grads_v = list(zip(grads_v, params_value))
-        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_a = optimizer_a.apply_gradients(grads_a)
-
+        # grads_a = tf.gradients(loss_a, params_actor)
+        # grads_v = tf.gradients(loss_v, params_value)
+        # max_grad_norm = 10
+        # if max_grad_norm is not None:
+        #     grads_a, _grad_norm = tf.clip_by_global_norm(grads_a, max_grad_norm)
+        #     grads_v, _grad_norm = tf.clip_by_global_norm(grads_v, max_grad_norm)
+        # grads_a = list(zip(grads_a, params_actor))
+        # grads_v = list(zip(grads_v, params_value))
         # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        # train_a = optimizer_a.apply_gradients(grads_a)
+
+        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
+        train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
         train_v = optimizer_v.minimize(loss_v, var_list=params_value)
 
         def train(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None, train_type='all'):
