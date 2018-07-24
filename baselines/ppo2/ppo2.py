@@ -11,6 +11,7 @@ from baselines.common import explained_variance
 from baselines.ppo2.ratio_functions import *
 from baselines.ppo2.common_functions import *
 
+
 def stack_values(buffers, values):
     if buffers[0] == []:
         for i in range(len(buffers)):
@@ -22,6 +23,32 @@ def stack_values(buffers, values):
 
     return buffers
 
+def update_pf_sets(pf_sets, candidate_set, value_loss):
+    keep_weight = False 
+
+    if value_loss > 50:
+        keep_weight = True 
+    elif pf_sets == []:
+        pf_stes.append(candidate_set)
+        keep_weight = True 
+    else:
+        add_candidate = False
+        for i in range(len(pf_sets)):
+            if np.all(candidate_set > pf_sets): # pf_sets[i] is pareto dominated by the candidate, remove pf_sets[i] and add candidate to the pf_sets
+                pf_sets.pop(i)
+                add_candidate = True
+            if np.any(candidate_set > pf_sets): # candidate is a part of current pf
+                add_candidate = True
+        if add_candidate:
+            pf_sets.append()
+            pf_stes.append(candidate_set)
+            keep_weight = True 
+        else:
+            keep_weight = False
+
+    return keep_weight
+
+
 def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
@@ -29,6 +56,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     global min_return, max_return
 
     first = True
+    pf_sets = []
 
     # if isinstance(lr, float): lr = constfn(lr)
     # else: assert callable(lr)
@@ -88,7 +116,6 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         # print(' ** 1. collect batch using base policy with size', nsteps*nenvs)
         # obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
         # advs_ori = returns - values
-        # base_mean_returns = np.mean(returns, axis = 0)     
         # print('    base batch collected', values.shape)
 
         # advs = compute_advs(advs_ori, np.array([0, -1, 0, 0, 0]))
@@ -102,19 +129,8 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         for i in range(2): 
             print('--------------------------------', i, '--------------------------------')
-            # 1: sample batch using base policy
-            print(' ***** 1. collect batch using base policy with size', nsteps*nenvs)
-            obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
-            advs_ori = returns - values
-            base_mean_returns = np.mean(returns, axis = 0)     
-            print('    base batch collected', values.shape)
-
-
-
-
             # 2: update base policy to a random direction
             # random_w = np.random.rand(REWARD_NUM)
-
             if i%2 == 0:
                 random_w = np.array([0, 1, 0, 0, 0])
                 # random_w = np.array([0.1, 1, 0.1, 0.1, 0.1])
@@ -122,28 +138,39 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                 random_w = np.array([0, -1, 0, 0, 0])
                 # random_w = np.array([0.1, -1, 0.1, 0.1, 0.1])
 
+
+            # 1: sample batch using base policy
+            print(' ***** 1. collect batch using base policy with size', nsteps*nenvs)
+            obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+            advs_ori = returns - values
+            print('    base batch collected', values.shape)
+
+            mean_returns = np.mean(returns, axis = 0)
+            print('    ', np.array_str(mean_returns, precision=3, suppress_small=True))
+            
+
+
             lr_p, cr_p = 0.001, 0.2
             print(' ***** 2 update base policy using --w', random_w, ' --alpha: lr', lr_p, ' --clip range', cr_p, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
             advs = compute_advs(advs_ori, random_w)
             mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
                                             obs, returns, masks, actions, values, advs, neglogpacs,
-                                            lr_p, cr_p, states, nsteps, model, update_type = 'actor')       
+                                            lr_p, cr_p, states, nsteps, model, update_type = 'all')       
             params_actor_p = model.get_current_params(params_type='actor')
             params_value_p = model.get_current_params(params_type='value')
+ 
 
 
 
-            for _ in range(10):
+            for g in range(20):
                 #   3: sample new batch
-                print(' ***** 3 sample batch using updated policy with size', nsteps*nenvs)
+                print(' ***** 3 sample batch using updated policy with size', nsteps*nenvs, g)
                 obs_p, returns_p, masks_p, actions_p, values_p, rewards_p, neglogpacs_p, states_p, epinfos_p, _ = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
                 advs_p_ori = returns_p - values_p
                 advs_p = compute_advs(advs_p_ori, random_w)
                 print('    updated batch collected', values_p.shape)
                 mean_returns = np.mean(returns_p, axis = 0)
                 print('    ', np.array_str(mean_returns, precision=3, suppress_small=True))
-
-
 
 
                 # update using new batch
@@ -156,12 +183,10 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                 display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
                                     rewards_p, returns_p, advs_p, epinfos_p, model, logger)   
 
+                obs_e, returns_e, masks_e, actions_e, values_e, rewards_e, neglogpacs_e, states_e, epinfos_e, _ = runner.run(int(100), is_test=False, use_deterministic=True) #pylint: disable=E0632
+                print('    evaluating policy', )
 
-
-            obs_e, returns_e, masks_e, actions_e, values_e, rewards_e, neglogpacs_e, states_e, epinfos_e, _ = runner.run(int(100), is_test=False, use_deterministic=True) #pylint: disable=E0632
-            print('    evaluating policy', )
-
-            # for displaying one step updated returns
+            # # for displaying one step updated returns
             if i%2 == 0:
                 for r_index in range(REWARD_NUM):
                     model.write_summary('meta_f/mean_ret'+str(r_index+1), np.mean(returns_e[:,r_index]), update)
@@ -171,10 +196,11 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     
 
 
-
-
             # compute delta
             print(' ***** 5 compute and save dalta')
+            # keep_weight = update_pf_sets(pf_sets, np.mean(returns_p, axis = 0), mblossvals[1]):
+
+            # if keep_weight:
             delta_actor_params = model.get_current_params(params_type='actor') - params_actor_p
             delta_value_params = model.get_current_params(params_type='value') - params_value_base
             # delta_value_params = params_value_p - params_value_base
@@ -182,6 +208,8 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             delta_actor_buff.append(delta_actor_params)
             delta_value_buff.append(delta_value_params)
             
+            print (' ***** length of pf sets', len(pf_sets))
+
             # save the one step updated models
             if (update % save_interval == 0 or first) and i == 0:
                 checkdir = osp.join('../model', 'checkpoints')

@@ -90,14 +90,16 @@ class Model(object):
 
         # grads_a = tf.gradients(loss_a, params_actor)
         # grads_v = tf.gradients(loss_v, params_value)
-        # max_grad_norm = 10
+        # max_grad_norm = 0.1
         # if max_grad_norm is not None:
-        #     grads_a, _grad_norm = tf.clip_by_global_norm(grads_a, max_grad_norm)
-        #     grads_v, _grad_norm = tf.clip_by_global_norm(grads_v, max_grad_norm)
+        #     grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
+        #     grads_v, _grad_norm_v = tf.clip_by_global_norm(grads_v, max_grad_norm)
         # grads_a = list(zip(grads_a, params_actor))
         # grads_v = list(zip(grads_v, params_value))
         # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         # train_a = optimizer_a.apply_gradients(grads_a)
+        # optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        # train_v = optimizer_a.apply_gradients(grads_v)
 
         optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
@@ -382,9 +384,9 @@ def constfn(val):
 def safemean(xs):
     return np.nan if len(xs) == 0 else np.mean(xs)
 
-def display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+def display_updated_result( lossvals, update, log_interval, nsteps, nbatch, 
                             rewards, returns, advs_ori, epinfobuf, model, logger):
-    lossvals = np.mean(mblossvals, axis=0)
+    # lossvals = np.mean(mblossvals, axis=0)
     if update % log_interval == 0 or update == 1:
         # # ev = explained_variance(values, returns)
         # logger.logkv("serial_timesteps", update*nsteps)
@@ -451,14 +453,15 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
                 slices = (arr[mbflatinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                 mbstates = states[mbenvinds]
                 mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
-            
-    return mblossvals
+
+    lossvals = np.mean(mblossvals, axis=0)
+    return lossvals
 
 
 
 def compute_advs( advs_ori, dir_w):
 
-    dir_w_length = np.sqrt(np.sum(dir_w*dir_w))
+    # dir_w_length = np.sqrt(np.sum(dir_w*dir_w))
     advs = np.zeros(len(advs_ori))
     # advs_nrom = np.zeros_like(advs_ori)
     # advs_nrom = (advs_ori - np.mean(advs_ori, axis=0)) / (np.std(advs_ori, axis=0) + 1e-8)
@@ -466,7 +469,7 @@ def compute_advs( advs_ori, dir_w):
     # advs_max = np.abs(np.max(advs_ori, axis=0))
 
     for t in range(len(advs_ori)):
-        advs[t] = np.sum(np.multiply(advs_ori[t], dir_w))/(dir_w_length + 1e-8) # use 11111
+        advs[t] = np.sum(np.multiply(advs_ori[t], dir_w))
 
         # print (np.array_str(advs_ori[t], precision=3, suppress_small=True) \
         # , np.array_str(advs_nrom[t], precision=3, suppress_small=True) \

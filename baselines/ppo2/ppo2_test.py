@@ -44,7 +44,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     model_pf = make_model('model_pf', need_summary = False)
     model_pf_2 = make_model('model_pf_2', need_summary = False)
 
-    start_update = 1
+    start_update = 2
 
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    

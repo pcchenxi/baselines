@@ -36,8 +36,8 @@ def train(env_id, num_timesteps, seed):
     nsteps = 128*256/ncpu
 
     ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(4096),
-        lam=0.99, gamma=[0.99, 0.99, 0.99, 0.99, 0.99], noptepochs=10, log_interval=1,
-        ent_coef=0.00,
+        lam=0.99, gamma=[0.99, 0.99, 0.99, 0.99, 0.99], noptepochs=15, log_interval=1,
+        ent_coef=0.0, # 0.003,
         lr= 5e-4,
         cliprange=0.2,
         #total_timesteps=num_timesteps,
