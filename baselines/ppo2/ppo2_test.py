@@ -44,12 +44,14 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     model_pf = make_model('model_pf', need_summary = False)
     model_pf_2 = make_model('model_pf_2', need_summary = False)
 
-    start_update = 2
+    start_update = 1
 
+    model_name = 'r_9'
+    
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    
     # checkdir = osp.join('../model/log', '1')
-    model_path = osp.join(checkdir, '%.5i'%(start_update))
+    model_path = osp.join(checkdir, model_name)
     # pf_path = checkdir_pf + '/easy_good'
     # pf_path_2 = checkdir_pf + '/14'
 
@@ -61,7 +63,6 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     max_return = [200, 30, 0, 0, 0]
     # min_return = [0, 0, -80, -15, -0.2]
-
     # model.load_value(checkdir+'/1')
 
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)

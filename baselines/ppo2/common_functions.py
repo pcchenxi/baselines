@@ -1,5 +1,6 @@
-import time
 import joblib
+import time, os
+import os.path as osp
 import numpy as np
 import tensorflow as tf
 
@@ -88,22 +89,23 @@ class Model(object):
             restores_value.append(p.assign(loaded_p)) 
 
 
-        # grads_a = tf.gradients(loss_a, params_actor)
-        # grads_v = tf.gradients(loss_v, params_value)
-        # max_grad_norm = 0.1
-        # if max_grad_norm is not None:
-        #     grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
-        #     grads_v, _grad_norm_v = tf.clip_by_global_norm(grads_v, max_grad_norm)
-        # grads_a = list(zip(grads_a, params_actor))
-        # grads_v = list(zip(grads_v, params_value))
-        # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        # train_a = optimizer_a.apply_gradients(grads_a)
+        grads_a = tf.gradients(loss_a, params_actor)
+        grads_v = tf.gradients(loss_v, params_value)
+        max_grad_norm = 0.1
+        if max_grad_norm is not None:
+            grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
+            grads_v, _grad_norm_v = tf.clip_by_global_norm(grads_v, max_grad_norm)
+        grads_a = list(zip(grads_a, params_actor))
+        grads_v = list(zip(grads_v, params_value))
+        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        train_a = optimizer_a.apply_gradients(grads_a)
         # optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         # train_v = optimizer_a.apply_gradients(grads_v)
 
-        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
+
         optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
         train_v = optimizer_v.minimize(loss_v, var_list=params_value)
 
         def train(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None, train_type='all'):
@@ -111,6 +113,8 @@ class Model(object):
 
             if train_type == 'all':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+                advs = np.clip(advs, -1, 1)
+                
                 td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
                 if states is not None:
@@ -123,6 +127,7 @@ class Model(object):
                 )[:-2]
             elif train_type == 'actor':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+                advs = np.clip(advs, -1, 1)
 
                 td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
@@ -142,7 +147,10 @@ class Model(object):
                     td_map[train_model.S] = states
                     td_map[train_model.M] = masks
 
-                sess.run(train_v, td_map )
+                return sess.run(
+                    [vf_loss, train_v],
+                    td_map                
+                )[:-1]
             else:
                 print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! wrong train_type !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
@@ -384,6 +392,13 @@ def constfn(val):
 def safemean(xs):
     return np.nan if len(xs) == 0 else np.mean(xs)
 
+def save_model(model, model_name):
+    checkdir = osp.join('../model', 'checkpoints')
+    os.makedirs(checkdir, exist_ok=True)
+    savepath_base = osp.join(checkdir, str(model_name))
+    print('    Saving to', savepath_base, savepath_base)
+    model.save(savepath_base, savepath_base)
+
 def display_updated_result( lossvals, update, log_interval, nsteps, nbatch, 
                             rewards, returns, advs_ori, epinfobuf, model, logger):
     # lossvals = np.mean(mblossvals, axis=0)
@@ -424,6 +439,7 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
                         obs, returns, masks, actions, values, advs, neglogpacs,
                         lrnow, cliprangenow, states, nsteps, model, update_type = 'all'):
     mblossvals = []
+    nbatch_train = int(nbatch_train)
     if states is None: # nonrecurrent version
         # inds = np.arange(nbatch)
         inds = np.arange(len(obs))
