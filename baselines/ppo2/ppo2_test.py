@@ -46,7 +46,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     start_update = 1
 
-    model_name = 'r_9'
+    model_name = '0'
     
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    

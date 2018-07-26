@@ -310,21 +310,22 @@ class Runner(object):
             self.obs[:], rewards, self.dones, infos = self.env.step(actions)
 
             rewards = rewards[:,:-1]
-            ##########################################################
-            ### for roboschool
-            for i in range(len(self.dones)):
-                if self.dones[i]:
-                    # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
-                    # print(rewards[0], values[0])
-                    v_preds = []
-                    if v_preds == []:
-                        v_preds = self.model.value(self.obs)
-                    if rewards[i][0] > 0:  
-                        rewards[i] += self.gamma*v_preds[i] 
-                    else:
-                        rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
-                        # rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
-                    # rewards[i] += self.gamma*v_preds[i] 
+            rewards = np.clip(rewards, -5, 5)
+            # ##########################################################
+            # ### for roboschool
+            # for i in range(len(self.dones)):
+            #     if self.dones[i]:
+            #         # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
+            #         # print(rewards[0], values[0])
+            #         v_preds = []
+            #         if v_preds == []:
+            #             v_preds = self.model.value(self.obs)
+            #         if rewards[i][0] > 0:  
+            #             rewards[i] += self.gamma*v_preds[i] 
+            #         else:
+            #             rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
+            #             # rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
+            #         # rewards[i] += self.gamma*v_preds[i] 
 
             # if t%100 == 0:
             #     print(t/self.nsteps, time.time() - t_s)
