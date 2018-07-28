@@ -41,21 +41,32 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             fh.write(cloudpickle.dumps(make_model))
 
     model = make_model('model', need_summary = False)
-    model_pf = make_model('model_pf', need_summary = False)
-    model_pf_2 = make_model('model_pf_2', need_summary = False)
+    # model_pf = make_model('model_pf', need_summary = False)
+    # model_pf_2 = make_model('model_pf_2', need_summary = False)
+
+
+    # params_all_random = model.get_current_params(params_type='all')
+    params_base = np.asarray(joblib.load('../model/meta_process/0'))
+    params_back = np.asarray(joblib.load('../model/meta_process/1_190'))
+    params_back_s = np.asarray(joblib.load('../model/meta_process/0'))
+    params_forward = np.asarray(joblib.load('../model/meta_process/0_190'))
+    params_forward_s = np.asarray(joblib.load('../model/meta_process/0'))
+
+    params_new = params_base + (params_back-params_back_s)*1 + (params_forward-params_forward_s)*1
+    model.replace_params(params_new, params_type='all')
 
     start_update = 1
 
-    model_name = '0'
+    model_name = '0_10'
     
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    
     # checkdir = osp.join('../model/log', '1')
-    model_path = osp.join(checkdir, model_name)
+    # model_path = osp.join(checkdir, model_name)
     # pf_path = checkdir_pf + '/easy_good'
     # pf_path_2 = checkdir_pf + '/14'
 
-    model.load(model_path)
+    # model.load(model_path)
     # model_pf.load(pf_path)
     # model_pf_2.load(pf_path_2)
 

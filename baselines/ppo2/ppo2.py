@@ -112,6 +112,16 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     nupdates = total_timesteps//nbatch
 
+    params_base = np.asarray(joblib.load('../model/meta_process/0'))
+    params_back = np.asarray(joblib.load('../model/meta_process/1_190'))
+    params_back_s = np.asarray(joblib.load('../model/meta_process/1_10'))
+    params_forward = np.asarray(joblib.load('../model/meta_process/0_190'))
+    params_forward_s = np.asarray(joblib.load('../model/meta_process/0_10'))
+
+    params_new = params_base + (params_back-params_back_s)*1 + (params_forward-params_forward_s)*1
+    model.replace_params(params_new, params_type='all')
+
+
     for update in range(start_update+1, nupdates+1):
         # assert nbatch % nminibatches == 0
         # nbatch_train = nbatch // nminibatches
@@ -119,6 +129,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         tstart = time.time()
 
         # save the base policy params
+        save_model(model, 0)
         params_all_base = model.get_current_params(params_type='all')
         params_actor_base = model.get_current_params(params_type='actor')
         params_value_base = model.get_current_params(params_type='value')
@@ -132,7 +143,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         w_vs = []
         w_returns = []
-        for i in range(3): 
+        for i in range(2): 
             keep_weight = False
             print('--------------------------------', i, '--------------------------------')
             # 2: update base policy to a random direction
@@ -140,20 +151,22 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             # random_w[1] = abs(random_w[1])
             # random_w[0] = abs(random_w[0])
             if i == 0:
-                random_w = [1, 0,  0,  0, 0]
-            elif i == 1:
                 random_w = [0, 1,  0,  0, 0]
+            elif i == 1:
+                random_w = [0, -1,  0,  0, 0]
             elif i == 2:
-                random_w = [0, 0,  1,  0, 0]
-            # elif i == 3:
-            #     random_w = [0, 0, -1,  0, 0]
-            # elif i == 4:
-            #     random_w = [0, 0,  0,  1, 0]
-            # elif i == 5:
-            #     random_w = [0, 0,  0, -1, 0]
+                random_w = [0, 0,  1,  1, 0]
+            elif i == 3:
+                random_w = [0, 1,  0,  0, 0]
+            elif i == 4:
+                random_w = [0, 1,  0,  1, 0]       
+            elif i == 5:
+                random_w = [0, 1,  1,  0, 0]
+            elif i == 6:
+                random_w = [0, 1,  1,  1, 0]
  
  
-            num_g = 15
+            num_g = 1
             for g in range(num_g):
 
                 print(' ***** 3 sample batch using updated policy with size', nsteps*nenvs, '    ', g)
@@ -172,29 +185,34 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                 mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
                                                 obs_p, returns_p, masks_p, actions_p, values_p, advs_p, neglogpacs_p,
                                                 lr_s, cr_s, states_p, nsteps, model, update_type = 'actor') 
-                v_loss = nimibatch_update(  nbatch, 15, nbatch_train/10,
+                v_loss = nimibatch_update(  nbatch, noptepochs, nbatch_train,
                                                 obs_p, returns_p, masks_p, actions_p, values_p, advs_p, neglogpacs_p,
                                                 lr_s, cr_s, states_p, nsteps, model, update_type = 'value') 
-                print(v_loss[0])
+                print('value loss',v_loss[0], 'entropy', mblossvals[2])
                 display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
                                     rewards_p, returns_p, advs_p, epinfos_p, model, logger)   
                 
+                if g%10 == 0:
+                    save_model(model, str(i)+'_'+str(g))
+                if mblossvals[2] < -10:
+                    break
+            
+            save_model(model, i+1)
+            params_actor_p = model.get_current_params(params_type='actor')
+            params_value_p = model.get_current_params(params_type='value')
 
-            # params_actor_p = model.get_current_params(params_type='actor')
-            # params_value_p = model.get_current_params(params_type='value')
 
 
+            # # obs_e, returns_e, masks_e, actions_e, values_e, rewards_e, neglogpacs_e, states_e, epinfos_e, _ = runner.run(int(100), is_test=False, use_deterministic=True) #pylint: disable=E0632
+            # mean_returns = np.mean(returns, axis = 0)
+            # w_v = np.sum(np.multiply(mean_returns, target_w))
+            # print(' eva', np.array_str(mean_returns, precision=3, suppress_small=True), w_v)
+            # w_vs.append(w_v)
+            # w_returns.append(mean_returns)
 
-            # obs_e, returns_e, masks_e, actions_e, values_e, rewards_e, neglogpacs_e, states_e, epinfos_e, _ = runner.run(int(100), is_test=False, use_deterministic=True) #pylint: disable=E0632
-            mean_returns = np.mean(returns, axis = 0)
-            w_v = np.sum(np.multiply(mean_returns, target_w))
-            print(' eva', np.array_str(mean_returns, precision=3, suppress_small=True), w_v)
-            w_vs.append(w_v)
-            w_returns.append(mean_returns)
-
-            # compute delta
-            print(' ***** 5 compute and save dalta')
-            keep_weight = update_pf_sets(pf_sets, np.mean(returns, axis = 0), v_loss)
+            # # compute delta
+            # print(' ***** 5 compute and save dalta')
+            # keep_weight = update_pf_sets(pf_sets, np.mean(returns, axis = 0), v_loss)
 
             # if keep_weight:
             # delta_actor_params = model.get_current_params(params_type='actor') - params_actor_p
@@ -211,11 +229,11 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
             # # for displaying one step updated returns
             for r_index in range(REWARD_NUM):
-                model.write_summary('meta/mean_ret'+str(r_index+1), np.mean(returns[:,r_index]), update)
+                model.write_summary('meta/mean_ret'+str(r_index+1), np.mean(returns_p[:,r_index]), update)
             # save the one step updated models
             # if keep_weight:
-            save_model(model, 'r_'+str(i+1))
-            np.save('../model/checkpoints/pf', np.asarray(pf_sets))
+            # save_model(model, 'r_'+str(i+1))
+            # np.save('../model/checkpoints/pf', np.asarray(pf_sets))
 
 
             #   6: restore base policy params
@@ -226,12 +244,28 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             # print(params_actor_base - model.get_current_params(params_type='actor'))
 
 
+        break
+
+        # w_weights = compute_weights(w_vs*1, pf_sets, w_returns, target_w)
+        print(' ***** 7 sum all delta params ----')
+        # for i in range(len(delta_actor_buff)):
+        #     delta_actor_buff[i] = delta_actor_buff[i] * w_weights[i]
+        sum_delta_actor = np.sum(delta_actor_buff, axis=0)
+        sum_delta_value = np.sum(delta_value_buff, axis=0)
+
+        print(' ***** 8 update policy -----')
+
+        update_params_actor = params_actor_base + sum_delta_actor 
+        update_params_value = params_value_base + sum_delta_value 
+
+        model.replace_params(update_params_actor, params_type='actor')
+        model.replace_params(update_params_value, params_type='value')
 
         # look ahead
                 # 1: sample batch using base policy
         print(' ***** 1. collect batch using base policy with size', nsteps*nenvs)
         v_loss_pre = 0
-        for k in range(5):
+        for k in range(50):
             obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
             advs_ori = returns - values
             print('    base batch collected', values.shape, k)
@@ -239,7 +273,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             mean_returns = np.mean(returns, axis = 0)
             print('    ', np.array_str(mean_returns, precision=3, suppress_small=True), np.sum(np.multiply(mean_returns, target_w)))
             
-            lr_p, cr_p = 0.001, 0.2
+            lr_p, cr_p = 0.0005, 0.2
             print(' ***** 2 update base policy using --w', target_w, ' --alpha: lr', lr_p, ' --clip range', cr_p, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
             advs = compute_advs(advs_ori, target_w)
             mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
@@ -261,36 +295,26 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
             display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
                                 rewards, returns, advs, epinfos, model, logger)   
-            # if k!= 0 and abs(v_loss_pre - v_loss[0]) < 10:
+            # if k!= 0 and abs(v_loss_pre - v_loss[0]) < 5:
             #     break
-                
+            # if v_loss[0] < 40:
+            #     break
             v_loss_pre = v_loss[0]
 
 
-
-
-        w_weights = compute_weights(w_vs*1, pf_sets, w_returns, target_w)
-        print(' ***** 7 sum all delta params ----')
-        for i in range(len(delta_actor_buff)):
-            delta_actor_buff[i] = delta_actor_buff[i] * w_weights[i]
-        sum_delta_actor = np.sum(delta_actor_buff, axis=0)
-        sum_delta_value = np.sum(delta_value_buff, axis=0)
-
-        print(' ***** 8 update policy -----')
-
-        update_params_actor = params_actor_base + sum_delta_actor # + np.sum(delta_actor_buff_1, axis=0)
-        update_params_value = params_value_base + sum_delta_value # + np.sum(delta_value_buff_1, axis=0)
+        update_params_actor = params_actor_base + (model.get_current_params(params_type='actor') - params_actor_base )*0.1
+        update_params_value = params_value_base + (model.get_current_params(params_type='value') - params_value_base )*0.1 
 
         model.replace_params(update_params_actor, params_type='actor')
         model.replace_params(update_params_value, params_type='value')
 
-        print(w_vs)
-        print(w_weights)
+        # print(w_vs)
+        # print(w_weights)
         print('\n') 
 
-        if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
-            save_model(model, update)
-            save_model(model, 0)
+        # if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
+        #     save_model(model, update)
+        #     save_model(model, 0)
 
         first = False
     env.close()
