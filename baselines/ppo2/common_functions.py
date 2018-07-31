@@ -8,6 +8,26 @@ REWARD_NUM = 5
 MIN_RETURN = np.array([-1, 0, -200, -100, -1])
 
 class Model(object):
+    def build_value_loss(self, model_name, vpreds, returns, lr, reward_num):
+        train_v_list = []
+        vf_loss_list = []
+        for i in range(reward_num):
+            vpred = tf.slice(vpreds, [0, i], [-1, 1])
+            ret = tf.slice(returns, [0, i], [-1, 1])
+            v_loss = tf.square(vpred - ret)
+            vf_loss = tf.reduce_mean(v_loss)
+
+            params_value = tf.trainable_variables(scope=model_name+'/value/value_'+str(i))
+            optimizer_v = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-5)
+            train_v = optimizer_v.minimize(v_loss, var_list=params_value)
+            train_v_list.append(train_v)
+
+            vf_loss_list.append(vf_loss)
+
+            vf_loss_sum = tf.reduce_mean(tf.square(vpreds - returns))
+        return train_v_list, vf_loss_list, vf_loss_sum   
+
+
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, model_name, lr, need_summary = False):
         
@@ -41,11 +61,13 @@ class Model(object):
         entropy = tf.reduce_mean(train_model.pd.entropy())
 
         vpred = train_model.vf
-        vpredclipped = OLDVPRED + tf.clip_by_value(train_model.vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
-        vf_losses1 = tf.square(vpred - RETRUN)
-        vf_losses2 = tf.square(vpredclipped - RETRUN)
+        # vpredclipped = OLDVPRED + tf.clip_by_value(train_model.vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
+        # vf_losses1 = tf.square(vpred - RETRUN)
+        # vf_losses2 = tf.square(vpredclipped - RETRUN)
         # vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
-        vf_loss = tf.reduce_mean(vf_losses1)
+        # vf_loss = tf.reduce_mean(vf_losses1)
+
+        train_v, vf_loss_list, vf_loss = self.build_value_loss(model_name, vpred, RETRUN, LR, REWARD_NUM)
 
         ratio = tf.exp(OLDNEGLOGPAC - neglogpac)
         pg_losses = -ADV * ratio
@@ -105,15 +127,15 @@ class Model(object):
         # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
 
-        optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_v = optimizer_v.minimize(loss_v, var_list=params_value)
+        # optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        # train_v = optimizer_v.minimize(loss_v, var_list=params_value)
 
-        def train(lr, cliprange, obs, returns, masks, actions, values, advs, neglogpacs, states=None, train_type='all'):
+        def train(lr, cliprange, obs, returns, actions, values, advs, neglogpacs, states=None, train_type='all'):
             # advs_suggest = advs_suggest / (advs_suggest.std() + 1e-8)
 
             if train_type == 'all':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-                advs = np.clip(advs, -1, 1)
+                # advs = np.clip(advs, -1, 1)
                 
                 td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
@@ -127,7 +149,7 @@ class Model(object):
                 )[:-2]
             elif train_type == 'actor':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-                advs = np.clip(advs, -1, 1)
+                # advs = np.clip(advs, -1, 1)
 
                 td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
@@ -136,6 +158,11 @@ class Model(object):
                     td_map[train_model.M] = masks
                 # ratio_ = sess.run(ratio, td_map)
                 # print('ratio', ratio_)
+                # print(sess.run(
+                #     vf_loss_list,
+                #     td_map                
+                # ))
+
                 return sess.run(
                     [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a],
                     td_map                
@@ -310,7 +337,7 @@ class Runner(object):
             self.obs[:], rewards, self.dones, infos = self.env.step(actions)
 
             rewards = rewards[:,:-1]
-            rewards = np.clip(rewards, -5, 5)
+            # rewards = np.clip(rewards, -5, 5)
             # ##########################################################
             # ### for roboschool
             # for i in range(len(self.dones)):
@@ -447,10 +474,10 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
         for ep in range(noptepochs):
             # print('ep', ep)
             np.random.shuffle(inds)
-            for start in range(0, nbatch, nbatch_train):
+            for start in range(0, len(obs), nbatch_train):
                 end = start + nbatch_train
                 mbinds = inds[start:end]
-                slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, advs, neglogpacs))
+                slices = (arr[mbinds] for arr in (obs, returns, actions, values, advs, neglogpacs))
 
                 losses = model.train(lrnow, cliprangenow, *slices, train_type=update_type)
                 mblossvals.append(losses)

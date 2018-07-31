@@ -33,9 +33,9 @@ def train(env_id, num_timesteps, seed):
     set_global_seeds(seed)
     policy = MlpPolicy
 
-    nsteps = 128*128/ncpu
+    nsteps = 128*32/ncpu
 
-    ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(4096),
+    ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(2048),
         lam=1, gamma=[0.99, 0.99, 0.99, 0.99, 0.99], noptepochs=10, log_interval=1,
         ent_coef=0.0, # 0.003,
         lr= 5e-4,

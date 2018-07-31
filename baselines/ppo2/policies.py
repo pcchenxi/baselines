@@ -135,6 +135,7 @@ class MlpPolicy(object):
         ob_shape = (None,) + ob_space.shape
         actdim = ac_space.shape[0]
         X = tf.placeholder(tf.float32, ob_shape, name='Ob') #obs
+        vf = []
         with tf.variable_scope(model_name, reuse=reuse):
             with tf.variable_scope('actor', reuse=reuse):
                 activ = tf.nn.relu
@@ -142,11 +143,18 @@ class MlpPolicy(object):
                 h2 = activ(fc(h1, 'pi_fc2', nh=64, init_scale=np.sqrt(2)))
                 pi = fc(h2, 'pi', actdim, init_scale=0.01)
                 logstd = tf.get_variable(name="logstd", shape=[1, actdim],
-                    initializer=tf.zeros_initializer())                    
-            with tf.variable_scope('value', reuse=reuse):
-                h1 = activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
-                h2 = activ(fc(h1, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
-                vf = fc(h2, 'vf', REWARD_NUM)
+                    initializer=tf.zeros_initializer())    
+            for i in range(REWARD_NUM):     
+                with tf.variable_scope('value', reuse=reuse):        
+                    with tf.variable_scope('value_' + str(i), reuse=reuse):
+                        h1 = activ(fc(X, 'vf_fc1_' + str(i), nh=128, init_scale=np.sqrt(2)))
+                        h2 = activ(fc(h1, 'vf_fc2_' + str(i), nh=64, init_scale=np.sqrt(2)))
+                        v = fc(h2, 'vf_' + str(i), 1)
+                        if vf == []:
+                            vf = v
+                        else:
+                            vf = tf.concat([vf, v], axis=1)
+                        # vf.append(v)
 
         pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
 

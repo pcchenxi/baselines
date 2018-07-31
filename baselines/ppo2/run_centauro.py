@@ -40,7 +40,7 @@ def train(env_id, num_timesteps, seed):
 
     nsteps = int(512*16/ncpu)
     ppo2.learn(policy=policy, env=env, nsteps=nsteps, nminibatches=2048,
-        lam=0.98, gamma=np.asarray([0.9, 0.9, 0.98, 0.9]), noptepochs=10, log_interval=1,
+        lam=0.98, gamma=np.asarray([0.99, 0.99, 0.99, 0.99]), noptepochs=10, log_interval=1,
         ent_coef=0.0,
         lr=3e-4,
         cliprange=0.2,
