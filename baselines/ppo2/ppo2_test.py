@@ -47,10 +47,11 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     start_update = 1
 
     model_name = '0'
+    w = np.array([1, 1, 0, 1, 1])
     
     # load training policy
-    # checkdir = osp.join('../model', 'checkpoints')    
-    checkdir = osp.join('../model/log/50', '0')
+    checkdir = osp.join('../model', 'checkpoints')    
+    # checkdir = osp.join('../model/log/50', '0')
     model_path = osp.join(checkdir, model_name)
     # pf_path = checkdir_pf + '/easy_good'
     # pf_path_2 = checkdir_pf + '/14'
@@ -138,14 +139,17 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         # print(ratios)
      
         # print(advs_normal)
-        # print(np.mean(rewards[:, 0:2],axis=0))
-        print(np.max((rewards),axis=0))
-        print(np.min((rewards),axis=0))
+        print('mean rewards',np.mean(returns,axis=0))
+        # print(np.max((rewards),axis=0))
+        # print(np.min((rewards),axis=0))
         print('----------------------------------------------------------------------')
         print('length and score: ')
+        scores = epinfos[-1]['r'][:-1]   
+        scores_w = np.multiply(scores, w)
         print(len(values), epinfos[-1]['r'][-1])
         print('----------------------------------------------------------------------')
-        print(epinfos[-1]['r'])
+        print(w)
+        print(epinfos[-1]['r'], np.sum(scores_w))
         if ret:
             break
     env.close()

@@ -182,8 +182,8 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     if start_update != 0:
         model.load(mocel_path)
-        # pf_sets = np.load('../model/checkpoints/pf.npy').tolist()
-        # pf_sets_convex = np.load('../model/checkpoints/pf_convex.npy').tolist()
+        pf_sets = np.load('../model/checkpoints/pf.npy').tolist()
+        pf_sets_convex = np.load('../model/checkpoints/pf_convex.npy').tolist()
 
 
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
@@ -211,30 +211,33 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         else:
             length = 3
 
-        for i in range(10): 
+        for i in range(6): 
             keep_weight = False
             print('--------------------------------', i, '--------------------------------')
             # 2: update base policy to a random direction
-            random_w = np.random.rand(REWARD_NUM)
-            random_w[0], random_w[3], random_w[4] = 1, 1, 1
-            # # rand_num = (np.random.rand()-0.5)*2
-            rand = np.random.rand()
-            if rand < 0.15:
-                random_w = [1, 0,  1,  1, 1]
-                # random_w[1] = rand_num
-            elif rand < 0.45:
-                random_w = [1, 1,  0,  1, 1]
-            else:
-                random_w = np.random.rand(REWARD_NUM)
-                random_w[0], random_w[3], random_w[4] = 1, 1, 1
+            random_w = (np.random.rand(REWARD_NUM))
+            w_sub_target = []
+            if len(w_sets) > 1:        
+                # index_1 = np.random.randint(len(w_sets))
+                # index_2 = np.random.randint(len(w_sets))
+                # w_sub_target = np.maximum(w_sets[index_1], w_sets[index_2])
+                w_sub_target = w_sets[i%len(w_sets)]
+                print ('        use pf_sets_convex', i, len(w_sets))
+            # random_w = (np.zeros(REWARD_NUM))
+            # random_w[1] = w_speed[i]
+            # random_w[2] = 1 - w_speed[i]
+            if i%3 == 0:
+                random_w = [1, 0,  0,  1, 1]
+            elif i%3 == 1:
+                random_w = [0, 1,  0,  1, 1]
+            elif i%3 == 2:
+                random_w = [0, 0,  1,  1, 1]
+        
 
-
-            num_g = 3
+            num_g = 10
             v_loss_pre = 0
-            lr_p, cr_p = 0.0015, 0.25
-            skip = False
+            lr_p, cr_p = 0.002, 0.4
             for g in range(num_g):
-                # env.reset()
                 print(random_w)
                 obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
                 advs_ori = returns - values
@@ -259,10 +262,8 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                                     rewards, returns, advs, epinfos, model, logger)    
 
                 v_loss_pre = v_loss
-                lr_p, cr_p = lr_p*0.6, cr_p*0.95
-                lr_p, cr_p = np.clip(lr_p, 0.0005, 10), np.clip(cr_p, 0.2, 10)
-                if mean_returns[2] > -30:
-                    break
+                # lr_p, cr_p = lr_p*0.9, cr_p*0.9
+                # lr_p, cr_p = np.clip(lr_p, 0.0005, 10), np.clip(cr_p, 0.2, 10)
 
         # if not keep_weight:
             # _, _ = compute_w_index(mean_returns, pf_sets, random_w)
@@ -274,7 +275,6 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             print (' ***** 6 restore base policy params')
             model.replace_params(params_actor_base, params_type='actor')
             model.replace_params(params_value_base, params_type='value')  
-            env.reset()
 
         all_neglogpacs = model.get_neglogpac(all_obs, all_a)
         all_values = model.get_values(all_obs)
@@ -288,7 +288,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         print(' ***** 2 update base policy using --w', target_w, ' --alpha: lr', lr_s, ' --clip range', cr_s, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
         mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
                                         all_obs, all_ret, masks, all_a, all_values, all_adv, all_neglogpacs,
-                                        lr_s, cr_s, states, nsteps, model, update_type = 'all', allow_early_stop = True) 
+                                        lr_s, cr_s, states, nsteps, model, update_type = 'all') 
         print('value loss',mblossvals[1], 'entropy', mblossvals[2])
         # display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
         #                     rewards_p, returns_p, advs_p, epinfos_p, model, logger)  

@@ -1,0 +1,2 @@
+mpirun -np 30 python3 -m baselines.ppo2.run_mujoco
+tensorboard --logdir=/home/xi/workspace/model/log

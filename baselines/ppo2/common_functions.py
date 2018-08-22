@@ -4,6 +4,11 @@ import os.path as osp
 import numpy as np
 import tensorflow as tf
 
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+comm_rank = comm.Get_rank()
+
 REWARD_NUM = 5
 MIN_RETURN = np.array([-1, 0, -200, -100, -1])
 
@@ -37,6 +42,7 @@ class Model(object):
             use_gpu = 1
         else:
             use_gpu = 0
+        use_gpu = 0
         config = tf.ConfigProto(
             inter_op_parallelism_threads=1,
             intra_op_parallelism_threads=1,
@@ -62,24 +68,25 @@ class Model(object):
 
         vpred = train_model.vf
         # vpredclipped = OLDVPRED + tf.clip_by_value(train_model.vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
-        # vf_losses1 = tf.square(vpred - RETRUN)
+        vf_losses1 = tf.square(vpred - RETRUN)
         # vf_losses2 = tf.square(vpredclipped - RETRUN)
         # vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
-        # vf_loss = tf.reduce_mean(vf_losses1)
+        vf_loss = tf.reduce_mean(vf_losses1)
 
-        train_v, vf_loss_list, vf_loss = self.build_value_loss(model_name, vpred, RETRUN, LR, REWARD_NUM)
+        # train_v, vf_loss_list, vf_loss = self.build_value_loss(model_name, vpred, RETRUN, 0.001, REWARD_NUM)
 
         ratio = tf.exp(OLDNEGLOGPAC - neglogpac)
         pg_losses = -ADV * ratio
         pg_losses2 = -ADV * tf.clip_by_value(ratio, 1.0 - CLIPRANGE, 1.0 + CLIPRANGE)
         pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
+        # pg_loss = tf.reduce_mean(pg_losses2)
         approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - OLDNEGLOGPAC))
         clipfrac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio - 1.0), CLIPRANGE)))
 
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
 
-        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
+        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
 
         with tf.variable_scope(model_name):
             params = tf.trainable_variables(scope=model_name)
@@ -112,13 +119,13 @@ class Model(object):
 
 
         grads_a = tf.gradients(loss_a, params_actor)
-        grads_v = tf.gradients(loss_v, params_value)
-        max_grad_norm = 0.1
+        # grads_v = tf.gradients(loss_v, params_value)
+        max_grad_norm = 0.0001
         if max_grad_norm is not None:
             grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
-            grads_v, _grad_norm_v = tf.clip_by_global_norm(grads_v, max_grad_norm)
+            # grads_v, _grad_norm_v = tf.clip_by_global_norm(grads_v, max_grad_norm)
         grads_a = list(zip(grads_a, params_actor))
-        grads_v = list(zip(grads_v, params_value))
+        # grads_v = list(zip(grads_v, params_value))
         optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         train_a = optimizer_a.apply_gradients(grads_a)
         # optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
@@ -127,15 +134,16 @@ class Model(object):
         # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
         # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
 
-        # optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        # train_v = optimizer_v.minimize(loss_v, var_list=params_value)
+        optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        train_v = optimizer_v.minimize(loss_v, var_list=params_value)
 
         def train(lr, cliprange, obs, returns, actions, values, advs, neglogpacs, states=None, train_type='all'):
             # advs_suggest = advs_suggest / (advs_suggest.std() + 1e-8)
 
             if train_type == 'all':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-                # advs = np.clip(advs, -1, 1)
+                # advs = advs / np.abs(advs).max()
+                # advs = np.clip(advs, -5, 5)
                 
                 td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
@@ -144,12 +152,13 @@ class Model(object):
                     td_map[train_model.M] = masks
 
                 return sess.run(
-                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a, train_v],
+                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v],
                     td_map                
                 )[:-2]
             elif train_type == 'actor':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-                # advs = np.clip(advs, -1, 1)
+                # advs = advs / np.abs(advs).max()
+                # advs = np.clip(advs, -5, 5)
 
                 td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
@@ -164,18 +173,20 @@ class Model(object):
                 # ))
 
                 return sess.run(
-                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, train_a],
+                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_a],
                     td_map                
                 )[:-1]
             elif train_type == 'value':
-                td_map = {train_model.X:obs, RETRUN:returns, LR:lr,
-                        CLIPRANGE:cliprange, OLDVPRED:values}
+                td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
+                        CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}                
+                # td_map = {train_model.X:obs, RETRUN:returns, LR:lr,
+                #         CLIPRANGE:cliprange, OLDVPRED:values}
                 if states is not None:
                     td_map[train_model.S] = states
                     td_map[train_model.M] = masks
 
                 return sess.run(
-                    [vf_loss, train_v],
+                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_v],
                     td_map                
                 )[:-1]
             else:
@@ -285,9 +296,9 @@ class Model(object):
         self.replace_params = replace_params
         self.get_current_params = get_current_params
 
-        if need_summary:
+        if need_summary and comm_rank==0:
             # self.summary_writer = tf.summary.FileWriter('../model/log', sess.graph)   
-            self.summary_writer = tf.summary.FileWriter('../model/log')   
+            self.summary_writer = tf.summary.FileWriter('../model/log/human_hard')   
             self.write_summary = write_summary
             self.log_histogram = log_histogram
         
@@ -338,21 +349,21 @@ class Runner(object):
 
             rewards = rewards[:,:-1]
             # rewards = np.clip(rewards, -5, 5)
-            # ##########################################################
-            # ### for roboschool
-            # for i in range(len(self.dones)):
-            #     if self.dones[i]:
-            #         # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
-            #         # print(rewards[0], values[0])
-            #         v_preds = []
-            #         if v_preds == []:
-            #             v_preds = self.model.value(self.obs)
-            #         if rewards[i][0] > 0:  
-            #             rewards[i] += self.gamma*v_preds[i] 
-            #         else:
-            #             rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
-            #             # rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
-            #         # rewards[i] += self.gamma*v_preds[i] 
+            ##########################################################
+            ### for roboschool
+            v_preds = []
+            for i in range(len(self.dones)):
+                if self.dones[i]:
+                    # # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
+                    # # print(rewards[0], values[0])
+                    if v_preds == []:
+                        v_preds = self.model.value(self.obs)
+                    # if rewards[i][0] > 0:  
+                    #     rewards[i] += self.gamma*v_preds[i] 
+                    # else:
+                    #     rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
+                    #     # rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
+                    rewards[i] += self.gamma*v_preds[i] 
 
             # if t%100 == 0:
             #     print(t/self.nsteps, time.time() - t_s)
@@ -465,22 +476,34 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
 
 def nimibatch_update(   nbatch, noptepochs, nbatch_train,
                         obs, returns, masks, actions, values, advs, neglogpacs,
-                        lrnow, cliprangenow, states, nsteps, model, update_type = 'all'):
+                        lrnow, cliprangenow, states, nsteps, model, update_type = 'all', allow_early_stop = True):
     mblossvals = []
     nbatch_train = int(nbatch_train)
     if states is None: # nonrecurrent version
         # inds = np.arange(nbatch)
         inds = np.arange(len(obs))
+        early_stop = False
         for ep in range(noptepochs):
-            # print('ep', ep)
+            # print('ep', ep, len(obs), nbatch, nbatch_train)
             np.random.shuffle(inds)
             for start in range(0, len(obs), nbatch_train):
+                params_all_base = model.get_current_params(params_type='all')
                 end = start + nbatch_train
                 mbinds = inds[start:end]
                 slices = (arr[mbinds] for arr in (obs, returns, actions, values, advs, neglogpacs))
 
                 losses = model.train(lrnow, cliprangenow, *slices, train_type=update_type)
                 mblossvals.append(losses)
+                # if not allow_early_stop:
+                # print(losses)
+                if losses[3] > 0.2:
+                    print(losses)
+                    model.replace_params(params_all_base, params_type='all') 
+                    early_stop = True
+                    # break
+            if early_stop:
+                print('stoped at ep ',ep)
+                break
                     
     else: # recurrent version
         assert nenvs % nminibatches == 0
@@ -505,7 +528,10 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
 
 def compute_advs( advs_ori, dir_w):
 
-    # dir_w_length = np.sqrt(np.sum(dir_w*dir_w))
+    # advs_ori = (advs_ori - np.mean(advs_ori, axis=0)) / (np.std(advs_ori, axis=0) + 1e-8)
+
+    dir_w = np.asarray(dir_w)
+    dir_w_length = np.sqrt(np.sum(dir_w*dir_w))
     advs = np.zeros(len(advs_ori))
     # advs_nrom = np.zeros_like(advs_ori)
     # advs_nrom = (advs_ori - np.mean(advs_ori, axis=0)) / (np.std(advs_ori, axis=0) + 1e-8)
@@ -513,7 +539,7 @@ def compute_advs( advs_ori, dir_w):
     # advs_max = np.abs(np.max(advs_ori, axis=0))
 
     for t in range(len(advs_ori)):
-        advs[t] = np.sum(np.multiply(advs_ori[t], dir_w))
+        advs[t] = np.sum(np.multiply(advs_ori[t], dir_w))/dir_w_length
 
         # print (np.array_str(advs_ori[t], precision=3, suppress_small=True) \
         # , np.array_str(advs_nrom[t], precision=3, suppress_small=True) \
