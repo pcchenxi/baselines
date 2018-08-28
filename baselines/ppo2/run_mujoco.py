@@ -13,14 +13,14 @@ def train(env_id, num_timesteps, seed):
     import gym, roboschool
     import tensorflow as tf
     from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
-    ncpu = 64
+    ncpu = 32
     config = tf.ConfigProto(allow_soft_placement=True,
                             intra_op_parallelism_threads=ncpu,
                             inter_op_parallelism_threads=ncpu)
     tf.Session(config=config).__enter__()
     def make_env():
         #env = gym.make(env_id)
-        env = gym.make("RoboschoolHumanoidFlagrunHarder-v1")
+        env = gym.make("RoboschoolHumanoid-v1")
         env = bench.Monitor(env, logger.get_dir(), allow_early_resets=True)
         return env
 
@@ -33,7 +33,7 @@ def train(env_id, num_timesteps, seed):
     set_global_seeds(seed)
     policy = MlpPolicy
 
-    nsteps = 128*256/ncpu
+    nsteps = 32*512/ncpu
 
     ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(4096),
         lam=1, gamma=[0.99, 0.99, 0.99, 0.99, 0.99], noptepochs=15, log_interval=1,

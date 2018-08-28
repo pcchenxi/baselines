@@ -174,7 +174,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     model = make_model('model', need_summary = True)
 
-    start_update = 51
+    start_update = 0
 
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    
@@ -205,8 +205,10 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         nbatch_train = nminibatches    
 
         np.random.seed(datetime.datetime.now().second + datetime.datetime.now().microsecond)
-        random_w = np.random.rand(REWARD_NUM)
-        index = np.random.choice(5, 1, p=[0.1, 0.2, 0.05, 0.05, 0.6])
+        task_random_w = np.random.rand(REWARD_NUM)
+        task_random_w[0] = 1
+        # index = np.random.choice(4, 1, p=[0.4, 0.3, 0.2, 0.1])
+        index = np.random.choice(4, 1)
         if index == 0:
             random_w = [1, 0,  0,  0, 0]
             # random_w[1] = rand_num
@@ -215,15 +217,16 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         elif index == 2:
             random_w =[0, 0,  1,  0, 0]
         elif index == 3:
-            random_w =[0, 1,  0,  1, 0]            
+            random_w =[0, 0,  0,  1, 0]            
         else:
             random_w = np.random.rand(REWARD_NUM)
-        #     # random_w[0], random_w[3], random_w[4] = 1, 1, 1
+        # #     # random_w[0], random_w[3], random_w[4] = 1, 1, 1
 
-        if comm_rank == 0:
-            random_w = [1, 1, 1, 1, 1]
+        # if comm_rank == 0:
+        #     random_w = [1, 1, 1, 1, 1]
 
-        num_g = 5
+        num_g = 10
+        num_update_base = 5
         v_loss_pre = 0
         lr_p, cr_p = 0.001, 0.3
         print(comm_rank, random_w)
@@ -235,14 +238,18 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             mean_returns = np.mean(returns, axis = 0)
 
             mean_return_gather = MPI.COMM_WORLD.gather(mean_returns)
-            if comm_rank == 0:
+            if comm_rank == 0 and update > 1:
                 for mean_return in mean_return_gather:
                     is_pf, is_convax, pf_sets, pf_sets_convex = update_pf_sets(pf_sets, mean_return, [])
-                print(g)
+                print(g, task_random_w)
                 print(comm_rank, '    ', np.array_str(mean_returns, precision=3, suppress_small=True), np.sum(np.multiply(mean_returns, random_w)))
 
-            if g < num_g:
+            if g > num_update_base:
                 advs = compute_advs(advs_ori, random_w)
+            else:
+                advs = compute_advs(advs_ori, task_random_w)
+
+            if g < num_g:
                 # lr_p, cr_p = 0.001, 0.5
                 # print(g, comm_rank,' ***** 2 update base policy using --w', random_w, ' --alpha: lr', lr_p, ' --clip range', cr_p, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
                 mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
@@ -253,87 +260,92 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                 #                                 obs, returns, masks, actions, values, advs, neglogpacs,
                 #                                 0.001, 0.2, states, nsteps, model, update_type = 'value')  
                 # print(v_loss, abs(v_loss_pre - v_loss), mblossvals[2])
-                if comm_rank == 0:
-                    display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
-                                        rewards, returns, advs, epinfos, model, logger)    
+                # if comm_rank == 0:
+                #     display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+                #                         rewards, returns, advs, epinfos, model, logger)    
 
             # print(time.time() - t_m)
             v_loss_pre = v_loss
-            lr_p, cr_p = lr_p*0.9, cr_p*0.9
+            lr_p, cr_p = lr_p*0.95, cr_p*0.95
             lr_p, cr_p = np.clip(lr_p, 0.0005, 10), np.clip(cr_p, 0.2, 10)
             # if mean_returns[2] > -30:
             #     break
 
-        obs_gather = MPI.COMM_WORLD.gather(obs)
-        returns_gather = MPI.COMM_WORLD.gather(returns)
-        actions_gather = MPI.COMM_WORLD.gather(actions)
-        advs_gather = MPI.COMM_WORLD.gather(advs)
+            if g > num_update_base:
+                obs_gather = MPI.COMM_WORLD.gather(obs)
+                returns_gather = MPI.COMM_WORLD.gather(returns)
+                actions_gather = MPI.COMM_WORLD.gather(actions)
+                advs_gather = MPI.COMM_WORLD.gather(advs)
 
-        if comm_rank == 0:
-            save_model(model, 1)
-            print(time.time() - t_b)
+                if comm_rank == 0:
+                    back_up_params = model.get_current_params(params_type='all')
 
-            print(comm_rank, '     use w', random_w)
-            all_obs, all_a, all_ret, all_adv = [], [], [], []
-            for obs, actions, returns, advs in zip(obs_gather, actions_gather, returns_gather, advs_gather):
-                all_obs, all_a, all_ret, all_adv = stack_values([all_obs, all_a, all_ret, all_adv], [obs, actions, returns, advs])
-            print('!!!!!!!!!!!!!!!!!!', len(all_obs))
-            # save_model(model, 'r_'+str(i))
+                    # save_model(model, 1)
+                    print(time.time() - t_b)
 
-            print (comm_rank, ' ***** 6 restore base policy params')
-            # model.replace_params(params_actor_base, params_type='actor')
-            # model.replace_params(params_value_base, params_type='value')  
-            model.replace_params(params_all_base, params_type='all')  
-            # env.reset()
+                    print(comm_rank, '     use w', random_w)
+                    all_obs, all_a, all_ret, all_adv = [], [], [], []
+                    for obs, actions, returns, advs in zip(obs_gather, actions_gather, returns_gather, advs_gather):
+                        for rw in range(REWARD_NUM):
+                            model.write_summary('return/mean_ret_'+str(rw+1), np.mean(returns[:,rw]), update)
+                        all_obs, all_a, all_ret, all_adv = stack_values([all_obs, all_a, all_ret, all_adv], [obs, actions, returns, advs])
+                    print('!!!!!!!!!!!!!!!!!!', len(all_obs))
+                    # save_model(model, 'r_'+str(i))
 
-            all_neglogpacs = model.get_neglogpac(all_obs, all_a)
-            all_values = model.get_values(all_obs)
+                    print (comm_rank, ' ***** 6 restore base policy params')
+                    # model.replace_params(params_actor_base, params_type='actor')
+                    # model.replace_params(params_value_base, params_type='value')  
+                    model.replace_params(params_all_base, params_type='all')  
+                    # env.reset()
 
-            # all_adv_ori = all_ret - all_values
-            # all_adv = compute_advs(all_adv_ori, target_w)
-            # all_adv = (all_adv - all_adv.mean()) / (all_adv.std() + 1e-8)
+                    all_neglogpacs = model.get_neglogpac(all_obs, all_a)
+                    all_values = model.get_values(all_obs)
 
-            lr_s, cr_s = 0.0003, 0.2
-            print('batch size', len(all_obs))
-            print(' ***** 2 update base policy using --w', target_w, ' --alpha: lr', lr_s, ' --clip range', cr_s, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
-            mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train*2,
-                                            all_obs, all_ret, masks, all_a, all_values, all_adv, all_neglogpacs,
-                                            lr_s, cr_s, states, nsteps, model, update_type = 'all', allow_early_stop = False) 
-            print('value loss',mblossvals[1], 'entropy', mblossvals[2])
-            print(mblossvals)
-            # display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
-            #                     rewards_p, returns_p, advs_p, epinfos_p, model, logger)  
-            params_all_base = model.get_current_params(params_type='all')
+                    # all_adv_ori = all_ret - all_values
+                    # all_adv = compute_advs(all_adv_ori, target_w)
+                    # all_adv = (all_adv - all_adv.mean()) / (all_adv.std() + 1e-8)
 
-            obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
-            # print('collected', len(obs))
-            # advs_ori = returns - values
-            # advs = compute_advs(advs_ori, target_w)
-            # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-            # mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
-            #                                 obs, returns, masks, actions, values, advs, neglogpacs,
-            #                                 lr_s, cr_s, states, nsteps, model, update_type = 'all')   
-            # display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
-            #                                     rewards, returns, advs, epinfos, model, logger)                                            
+                    lr_s, cr_s = 0.0003, 0.2
+                    print('batch size', len(all_obs))
+                    print(' ***** 2 update base policy using --w', target_w, ' --alpha: lr', lr_s, ' --clip range', cr_s, ' --minibatch', nbatch_train, ' --epoch', noptepochs)
+                    mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train*2,
+                                                    all_obs, all_ret, masks, all_a, all_values, all_adv, all_neglogpacs,
+                                                    lr_s, cr_s, states, nsteps, model, update_type = 'all', allow_early_stop = False) 
+                    print('value loss',mblossvals[1], 'entropy', mblossvals[2])
+                    print(mblossvals)
 
-            mean_returns_t = np.mean(returns, axis = 0)
-            is_pf, is_convax, pf_sets, pf_sets_convex = update_pf_sets(pf_sets, mean_returns_t, [])
-            print('after updated    ', np.array_str(mean_returns_t, precision=3, suppress_small=True), np.sum(np.multiply(mean_returns_t, target_w)))
-            for r in range(REWARD_NUM):
-                model.write_summary('meta/mean_ret_'+str(r+1), np.mean(returns[:,r]), update)
-            if len(pf_sets) > 1:
-                _, target_v = compute_w_index(mean_returns_t, pf_sets, target_w)
-                # model.write_summary('meta/mean_ret_sum', np.mean(np.sum(returns, axis=1), axis=0), update)
-                model.write_summary('meta/mean_ret_sum', target_v, update)
+                    obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+                    # print('collected', len(obs))
+                    # advs_ori = returns - values
+                    # advs = compute_advs(advs_ori, target_w)
+                    # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+                    # mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+                    #                                 obs, returns, masks, actions, values, advs, neglogpacs,
+                    #                                 lr_s, cr_s, states, nsteps, model, update_type = 'all')   
+                    display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+                                                        rewards, returns, advs, epinfos, model, logger)                                            
+                    params_all_base = model.get_current_params(params_type='all')
+                    model.replace_params(back_up_params, params_type='all')  
 
 
-            print('\n') 
+                    mean_returns_t = np.mean(returns, axis = 0)
+                    # is_pf, is_convax, pf_sets, pf_sets_convex = update_pf_sets(pf_sets, mean_returns_t, [])
+                    print('after updated    ', np.array_str(mean_returns_t, precision=3, suppress_small=True), np.sum(np.multiply(mean_returns_t, target_w)))
+                    for r in range(REWARD_NUM):
+                        model.write_summary('meta/mean_ret_'+str(r+1), np.mean(returns[:,r]), update)
+                    if len(pf_sets) > 1:
+                        _, target_v = compute_w_index(mean_returns_t, pf_sets, target_w)
+                        # model.write_summary('meta/mean_ret_sum', np.mean(np.sum(returns, axis=1), axis=0), update)
+                        model.write_summary('meta/mean_ret_sum', target_v, update)
 
-            if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
-                save_model(model, update)
-                save_model(model, 0)
-                np.save('../model/checkpoints/pf.npy', pf_sets)
-                np.save('../model/checkpoints/pf_convex.npy', pf_sets_convex)
+
+                    print('\n') 
+
+                    if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
+                        save_model(model, update)
+                        save_model(model, 0)
+                        np.save('../model/checkpoints/pf.npy', pf_sets)
+                        np.save('../model/checkpoints/pf_convex.npy', pf_sets_convex)
 
         params_all_base = comm.bcast(params_all_base, root=0)
         first = False

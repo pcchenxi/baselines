@@ -120,7 +120,7 @@ class Model(object):
 
         grads_a = tf.gradients(loss_a, params_actor)
         # grads_v = tf.gradients(loss_v, params_value)
-        max_grad_norm = 0.0001
+        max_grad_norm = 0.0005
         if max_grad_norm is not None:
             grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
             # grads_v, _grad_norm_v = tf.clip_by_global_norm(grads_v, max_grad_norm)
@@ -358,12 +358,11 @@ class Runner(object):
                     # # print(rewards[0], values[0])
                     if v_preds == []:
                         v_preds = self.model.value(self.obs)
-                    # if rewards[i][0] > 0:  
-                    #     rewards[i] += self.gamma*v_preds[i] 
-                    # else:
-                    #     rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
-                    #     # rewards[i][2:] += self.gamma[2:]*MIN_RETURN[2:]
-                    rewards[i] += self.gamma*v_preds[i] 
+                    if rewards[i][0] > 0:  
+                        rewards[i] += self.gamma*v_preds[i] 
+                    else:
+                        rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
+                    # rewards[i] += self.gamma*v_preds[i] 
 
             # if t%100 == 0:
             #     print(t/self.nsteps, time.time() - t_s)
@@ -458,9 +457,9 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
         # step_label = update*nbatch
         step_label = update
         for i in range(REWARD_NUM):
-            model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
+            # model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
             model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
-            model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)\
+            # model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)\
             # model.log_histogram('return_dist/return_'+str(i+1), returns[:,i], step_label)
             # model.log_histogram('adv_dist/adv_'+str(i+1), advs_ori[:,i], step_label)
             
@@ -546,7 +545,7 @@ def compute_advs( advs_ori, dir_w):
         # , advs[t]
         # )
 
-    # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+    advs = (advs - advs.mean()) / (advs.std() + 1e-8)
     # advs = advs / (advs.std() + 1e-8)
 
     # for t in range(len(advs_ori)):
@@ -554,8 +553,6 @@ def compute_advs( advs_ori, dir_w):
     #     , np.array_str(advs_nrom[t], precision=3, suppress_small=True) \
     #     , advs[t]
     #     )
-
-    # print(dir_w)
 
     return advs
 
