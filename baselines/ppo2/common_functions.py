@@ -9,7 +9,7 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 comm_rank = comm.Get_rank()
 
-REWARD_NUM = 5
+REWARD_NUM = 1
 MIN_RETURN = np.array([-1, 0, -200, -100, -1])
 
 class Model(object):
@@ -296,9 +296,16 @@ class Model(object):
         self.replace_params = replace_params
         self.get_current_params = get_current_params
 
-        if need_summary and comm_rank==0:
+        if need_summary:
             # self.summary_writer = tf.summary.FileWriter('../model/log', sess.graph)   
-            self.summary_writer = tf.summary.FileWriter('../model/log/human_hard')   
+            # log_path = '../model/log/exp/landing/mp_morl_meta' #+ str(comm_rank)
+            # log_path = '../model/log/exp/ant/meta_finetune_' + str(comm_rank)
+            # log_path = '../model/log/exp/cheetah/mp_train_' + str(comm_rank)
+            log_path = '../model/log/exp/puck/normal'
+
+            os.makedirs(log_path, exist_ok=True)
+            # self.summary_writer = tf.summary.FileWriter('../model/log/human_hard')   
+            self.summary_writer = tf.summary.FileWriter(log_path)  
             self.write_summary = write_summary
             self.log_histogram = log_histogram
         
@@ -346,23 +353,26 @@ class Runner(object):
             mb_dones.append(self.dones)
 
             self.obs[:], rewards, self.dones, infos = self.env.step(actions)
+            # print(self.obs[:])
+
+            # print(self.dones, rewards)
 
             rewards = rewards[:,:-1]
             # rewards = np.clip(rewards, -5, 5)
             ##########################################################
             ### for roboschool
-            v_preds = []
-            for i in range(len(self.dones)):
-                if self.dones[i]:
-                    # # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
-                    # # print(rewards[0], values[0])
-                    if v_preds == []:
-                        v_preds = self.model.value(self.obs)
-                    if rewards[i][0] > 0:  
-                        rewards[i] += self.gamma*v_preds[i] 
-                    else:
-                        rewards[i][2:] += self.gamma[2:]*v_preds[i][2:]
-                    # rewards[i] += self.gamma*v_preds[i] 
+            # v_preds = []
+            # for i in range(len(self.dones)):
+            #     if self.dones[i]:
+            #         # # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
+            #         # # print(rewards[0], values[0])
+            #         if v_preds == []:
+            #             v_preds = self.model.value(self.obs)
+            #         if rewards[i][0] > 0:  
+            #             rewards[i] += self.gamma*v_preds[i] 
+            #         else:
+            #             rewards[i][2:] += self.gamma*v_preds[i][2:]
+            #         # rewards[i] += self.gamma*v_preds[i] 
 
             # if t%100 == 0:
             #     print(t/self.nsteps, time.time() - t_s)
@@ -401,17 +411,23 @@ class Runner(object):
         for t in reversed(range(len(mb_values))):
             nextnonterminal = np.zeros(last_values.shape)
             if t == len(mb_values) - 1:
-                nextnonterminal[:,0] = nextnonterminal[:,1] = nextnonterminal[:,2] = nextnonterminal[:,3] = nextnonterminal[:,4] = 1.0 - self.dones
+                # nextnonterminal = 1.0 - self.dones
+                for l in range(len(nextnonterminal[0])):
+                    nextnonterminal[:,l] = 1.0 - self.dones
                 nextvalues = last_values
             else:
-                nextnonterminal[:,0] = nextnonterminal[:,1] = nextnonterminal[:,2] = nextnonterminal[:,3] = nextnonterminal[:,4] = 1.0 - mb_dones[t+1]
+                for l in range(len(nextnonterminal[0])):
+                    nextnonterminal[:,l] = 1.0 - mb_dones[t+1]           
+                # nextnonterminal = 1.0 - mb_dones[t+1]
                 nextvalues = mb_values[t+1]
 
             delta = mb_rewards[t] + self.gamma * nextvalues * nextnonterminal - mb_values[t]
 
             mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
-        mb_returns = mb_advs + mb_values
+            # print(delta, nextvalues, mb_values[t], self.gamma, nextnonterminal, mb_rewards[t])
+            # print(mb_advs[t])
 
+        mb_returns = mb_advs + mb_values
         return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_rewards, mb_neglogpacs)),
             mb_states, epinfos, ret)
 
@@ -434,7 +450,7 @@ def save_model(model, model_name):
     checkdir = osp.join('../model', 'checkpoints')
     os.makedirs(checkdir, exist_ok=True)
     savepath_base = osp.join(checkdir, str(model_name))
-    print('    Saving to', savepath_base, savepath_base)
+    # print('    Saving to', savepath_base, savepath_base)
     model.save(savepath_base, savepath_base)
 
 def display_updated_result( lossvals, update, log_interval, nsteps, nbatch, 
@@ -457,7 +473,7 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
         # step_label = update*nbatch
         step_label = update
         for i in range(REWARD_NUM):
-            # model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
+            model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
             model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
             # model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)\
             # model.log_histogram('return_dist/return_'+str(i+1), returns[:,i], step_label)

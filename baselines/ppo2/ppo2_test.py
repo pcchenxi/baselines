@@ -23,7 +23,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     else: assert callable(cliprange)
     total_timesteps = int(total_timesteps)
 
-    nenvs = env.num_envs
+    nenvs = 1
     ob_space = env.observation_space
     ac_space = env.action_space
     nbatch = nenvs * nsteps
@@ -46,25 +46,13 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     start_update = 1
 
-    model_name = '0'
-    w = np.array([1, 1, 0, 1, 1])
+    model_name = '1'
+    random_ws = np.load('/home/xi/workspace/weights_half.npy')
+    w = random_ws[int(model_name)]
+    print(int(model_name), w)
     
-    # load training policy
-    checkdir = osp.join('../model', 'checkpoints')    
-    # checkdir = osp.join('../model/log/50', '0')
-    model_path = osp.join(checkdir, model_name)
-    # pf_path = checkdir_pf + '/easy_good'
-    # pf_path_2 = checkdir_pf + '/14'
-
+    model_path = '/home/xi/workspace/exp_models/exp_human/meta_finetune/' + str(model_name)
     model.load(model_path)
-    # model_pf.load(pf_path)
-    # model_pf_2.load(pf_path_2)
-
-    # min_return, max_return = np.load(checkdir+ '/minmax_return_' + str(start_update) + '.npy')
-
-    max_return = [200, 30, 0, 0, 0]
-    # min_return = [0, 0, -80, -15, -0.2]
-    # model.load_value(checkdir+'/1')
 
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
 
@@ -84,40 +72,12 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         # lrnow = lr
         # cliprangenow = cliprange
-        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(nsteps, is_test=True, use_deterministic=False) #pylint: disable=E0632
+        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(nsteps, is_test=True, use_deterministic=True) #pylint: disable=E0632
         pi_mean, pi_std = model.get_actions_dist(obs)
 
-        advs_ori = returns - values
-        # advs = compute_advs(max_return, values, advs_ori, [], [])
-
-        # values_pf = model_pf.get_values(obs)
-        # actions_suggest, _ = model_pf.get_actions_dist(obs)
-        # adv_ori_suggest = values_pf - values
-        # advs_suggest = compute_advs(max_return, values, adv_ori_suggest, np.abs(pi_mean - actions_suggest), pi_std)
-
-
-        # values_pf_2 = model_pf_2.get_values(obs)
-        # actions_suggest_2 = model_pf_2.get_actions(obs)
-        # adv_ori_suggest_2 = values_pf_2 - values
-        # advs_suggest_2 = compute_advs(max_return, values, adv_ori_suggest_2)        
+        advs_ori = returns - values     
 
         print (epinfos)
-
-        # for t in range(len(returns)):
-            # print(epinfos[t])
-        #     print(''
-        #     , advs[t]
-        #     , advs_suggest[t]
-        #     # , advs_suggest_2[t]
-        #     # , v_score_pf[t]
-        #     # , np.array_str(np.multiply(advs_ori[t], dir_v[t])/dir_v_length[t], precision=3, suppress_small=True) \
-        #     # , np.array_str(dir_v[t], precision=3, suppress_small=True) \
-        #     , np.array_str(values[t], precision=3, suppress_small=True) \
-        #     # # , np.array_str(ratios, precision=3, suppress_small=True) \
-        #     # # , np.array_str(ratios_mean, precision=3, suppress_small=True) \
-        #     , np.array_str(rewards[t], precision=3, suppress_small=True) \
-        #     , np.array_str(returns[t], precision=3, suppress_small=True) \
-        #     )
 
         # advs_normal = (advs - advs.mean()) / (advs.std() + 1e-8)
         epinfobuf.extend(epinfos)
@@ -139,6 +99,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         # print(ratios)
      
         # print(advs_normal)
+        # print(rewards, values)
         print('mean rewards',np.mean(returns,axis=0))
         # print(np.max((rewards),axis=0))
         # print(np.min((rewards),axis=0))
