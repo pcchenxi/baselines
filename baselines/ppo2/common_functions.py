@@ -9,7 +9,7 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 comm_rank = comm.Get_rank()
 
-REWARD_NUM = 1
+REWARD_NUM = 3
 MIN_RETURN = np.array([-1, 0, -200, -100, -1])
 
 class Model(object):
