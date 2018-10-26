@@ -106,15 +106,15 @@ def demo_run(model_index):
 
     control_me = PygletInteractiveWindow(env.unwrapped)
     env.reset()
-    eu = env.unwrapped
+    eu = env.ustates
     obs = env.reset()
 
     states = model.initial_state
 
     print(random_ws[model_index])
     for _ in range(500):
-        actions, values, states, neglogpacs = model.step_max([obs], states, False)
-        # actions, values, states, neglogpacs = model.step([obs], states, False)
+        # actions, values, states, neglogpacs = model.step_max([obs], states, False)
+        actions, values, states, neglogpacs = model.step([obs], states, False)
 
         # x, y, z = eu.body_xyz
         # eu.walk_target_x = x + 100.1*np.cos(control_me.theta)   # 1.0 or less will trigger flag reposition by env itself
@@ -134,13 +134,15 @@ def demo_run(model_index):
 
 
 def run_test():
-    env = gym.make("hockeypuck-v0")
-    env.seed()
-    # env = gym.make("RoboschoolAnt-v1")
+    # env = gym.make("hockeypuck-v0")
+    # env.seed()
+    env = gym.make("FetchPush-v1")
 
     policy = MlpPolicy
     ob_space = env.observation_space
     ac_space = env.action_space
+
+    print(ac_space)
 
     make_model = lambda model_name, need_summary : Model(model_name=model_name, policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=1, nbatch_train=1000,
                     nsteps=1000, ent_coef=0, vf_coef=0, lr = 0,
@@ -155,19 +157,21 @@ def run_test():
     states = model.initial_state
 
     for _ in range(100):
-        for i in range(200):
-            actions, values, states, neglogpacs = model.step_max([obs], states, False)
+        obs = env.reset()
+        for i in range(80):
+            actions, values, states, neglogpacs = model.step([obs], states, False)
+
             obs, r, done, _ = env.step(actions[0])
             env.render('human')
-            # print(r)
+            print(r, values)
             if done:
-                print('length', i, 'reward', r)
-                for _ in range(10):
-                    action = np.array([0, 0, 0, 0, 0, 0, 0])
-                    _, r, _, _ = env.step(action)
+                # print('length', i, 'reward', r)
+                # for _ in range(10):
+                #     action = np.array([0, 0, 0, 0, 0, 0, 0])
+                #     _, r, _, _ = env.step(action)
                 
                 obs = env.reset()
-                # break       
+                break       
     env.close() 
         
 if __name__=="__main__":

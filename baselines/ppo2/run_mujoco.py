@@ -8,23 +8,24 @@ def train(env_id, num_timesteps, seed):
     from baselines.common import set_global_seeds
     from baselines.common.vec_env.vec_normalize import VecNormalize
     from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
-    # from baselines.ppo2 import ppo_mpi_morl as ppo2
+    from baselines.ppo2 import ppo_mpi_morl as ppo2
     # from baselines.ppo2 import ppo_mpi_fine_tune as ppo2
     # from baselines.ppo2 import ppo_policy_plot as ppo2
-    from baselines.ppo2 import ppo_mpi_normal as ppo2
+    # from baselines.ppo2 import ppo_mpi_normal as ppo2
     from baselines.ppo2.policies import MlpPolicy
     import gym, roboschool
     import gym_hockeypuck
     import tensorflow as tf
     from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
-    ncpu = 128
+    ncpu = 64
     config = tf.ConfigProto(allow_soft_placement=True,
                             intra_op_parallelism_threads=ncpu,
                             inter_op_parallelism_threads=ncpu)
     tf.Session(config=config).__enter__()
     def make_env():
         #env = gym.make(env_id)
-        env = gym.make("hockeypuck-v0")
+        # env = gym.make("hockeypuck-v0")
+        env = gym.make("FetchPush-v1")
         env = bench.Monitor(env, logger.get_dir(), allow_early_resets=True)
         return env
 
@@ -32,20 +33,20 @@ def train(env_id, num_timesteps, seed):
     for _ in range(ncpu):
         envs.append(make_env)
     env = SubprocVecEnv(envs)
-    #env = VecNormalize(env)
+    # env = VecNormalize(env)
     # set_global_seeds(seed)
     policy = MlpPolicy
 
-    nsteps = 32*512/ncpu
+    nsteps = 10240/ncpu
 
-    ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(2048),
-        lam=1, gamma=0.99, noptepochs=5, log_interval=1,
+    ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(1024),
+        lam=0.98, gamma=0.99, noptepochs=5, log_interval=1,
         ent_coef=0.0, # 0.003,
         lr= 3e-4,
         cliprange=0.2,
         #total_timesteps=num_timesteps,
         total_timesteps = 10e+7,
-        save_interval = 5)
+        save_interval = 2)
 
 
 def main():

@@ -1,0 +1,23 @@
+Logging to /tmp/openai-2018-10-18-11-02-05-133509
+[33mWARN: gym.spaces.Box autodetected dtype as <class 'numpy.float32'>. Please provide explicit dtype.[0m
+[33mWARN: gym.spaces.Box autodetected dtype as <class 'numpy.float32'>. Please provide explicit dtype.[0m
+[33mWARN: Environment '<class 'roboschool.gym_mujoco_walkers.RoboschoolHumanoid'>' has deprecated methods '_step' and '_reset' rather than 'step' and 'reset'. Compatibility code invoked. Set _gym_disable_underscore_compat = True to disable this behavior.[0m
+nbatch 16384 1 16384 0 2048
+[1. 0. 1. 1. 1.]
+parama 13 /home/xi/workspace/model/exp_meta_morl/0
+loaded
+[1.  0.2 0.8 1.  1. ]
+parama 13 /home/xi/workspace/model/exp_meta_morl/4
+loaded
+[1.  0.4 0.6 1.  1. ]
+parama 13 /home/xi/workspace/model/exp_meta_morl/8
+loaded
+[1.  0.6 0.4 1.  1. ]
+parama 13 /home/xi/workspace/model/exp_meta_morl/12
+loaded
+[1.  0.8 0.2 1.  1. ]
+parama 13 /home/xi/workspace/model/exp_meta_morl/16
+loaded
+[1. 1. 0. 1. 1.]
+parama 13 /home/xi/workspace/model/exp_meta_morl/20
+loaded

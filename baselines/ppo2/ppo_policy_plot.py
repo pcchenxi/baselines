@@ -187,18 +187,22 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         # pf_sets = np.load('../model/checkpoints/pf.npy').tolist()
         # pf_sets_convex = np.load('../model/checkpoints/pf_convex.npy').tolist()
 
+    checkdir = '/home/xi/workspace/model/exp_meta_morl/'   
+    mocel_path = osp.join(checkdir, str(0))
+    model.load(mocel_path) 
+
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
-
+    
     nupdates = total_timesteps//nbatch
-
     sum_vs, indexs = [], []
-
-
     mp_mean, meta_mean = [], []
     mp_r, meta_r = [], []
 
     random_ws = np.load('/home/xi/workspace/weights_half.npy')
     # random_ws = np.load('/home/xi/workspace/ws.npy')
+
+    obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False, use_deterministic=True) #pylint: disable=E0632
+    h1_all, h2_all, pi_all = [], [], []
     for update in range(0, 21, 4):
         random_w = np.ones(REWARD_NUM)
         random_w[1] = 0.05*update
@@ -211,31 +215,42 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         mocel_path = osp.join(checkdir, str(update))
         model.load(mocel_path)  
 
-        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False, use_deterministic=True) #pylint: disable=E0632
-        mean_returns = np.mean(returns, axis = 0)
-        mean_r = np.sum(np.multiply(mean_returns, random_w))
-        meta_r.append(mean_r)
+        for ob in obs:
+            h1, h2, pi = model.get_all_output([ob])
+            h1_all.append(h1)
+            h2_all.append(h2)
+            pi_all.append(pi)
+            # break
+        
+    mean_h1 = np.mean(pi_all, axis=0)
+    std_h1 = np.std(pi_all, axis=0)
+    print(np.array_str(std_h1, precision=3, suppress_small=True))
 
-        meta_mean.append(mean_returns)
-        plt.scatter(np.asarray(meta_mean)[:,1], np.asarray(meta_mean)[:,2], c='b')
+        # obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False, use_deterministic=True) #pylint: disable=E0632
+        # mean_returns = np.mean(returns, axis = 0)
+        # mean_r = np.sum(np.multiply(mean_returns, random_w))
+        # meta_r.append(mean_r)
 
+        # meta_mean.append(mean_returns)
+        # plt.scatter(np.asarray(meta_mean)[:,1], np.asarray(meta_mean)[:,2], c='b')
 
-        checkdir = '/home/xi/workspace/model/exp_mp_morl/'   
-        mocel_path = osp.join(checkdir, str(update))
-        model.load(mocel_path)  
+        # ---------------------------------------------------------------------------------------------
+        # checkdir = '/home/xi/workspace/model/exp_mp_morl/'   
+        # mocel_path = osp.join(checkdir, str(update))
+        # model.load(mocel_path)  
 
-        obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False, use_deterministic=True) #pylint: disable=E0632
-        mean_returns = np.mean(returns, axis = 0)
-        mean_r = np.sum(np.multiply(mean_returns, random_w))
-        mp_r.append(mean_r)
+        # obs, returns, masks, actions, values, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False, use_deterministic=True) #pylint: disable=E0632
+        # mean_returns = np.mean(returns, axis = 0)
+        # mean_r = np.sum(np.multiply(mean_returns, random_w))
+        # mp_r.append(mean_r)
 
-        mp_mean.append(mean_returns)
-        plt.scatter(np.asarray(mp_mean)[:,1], np.asarray(mp_mean)[:,2], c='r', marker='x')
+        # mp_mean.append(mean_returns)
+        # plt.scatter(np.asarray(mp_mean)[:,1], np.asarray(mp_mean)[:,2], c='r', marker='x')
 
         # plt.show()
 
-    for i in range(len(mp_r)):
-        print(meta_r[i], mp_r[i])
+    # for i in range(len(mp_r)):
+    #     print(meta_r[i], mp_r[i])
 
     # for update in range(30):
     #     checkdir = '/home/xi/workspace/exp_models/exp_ant/mp_train'   
@@ -272,6 +287,6 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     #             np.save('../model/checkpoints/pf_'+str(g)+'.npy', pf_sets)
     #     plt.pause(0.01)
 
-    plt.show()
+    # plt.show()
     env.close()
 

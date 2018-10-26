@@ -9,8 +9,7 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 comm_rank = comm.Get_rank()
 
-REWARD_NUM = 1
-MIN_RETURN = np.array([-1, 0, -200, -100, -1])
+REWARD_NUM = 5
 
 class Model(object):
     def build_value_loss(self, model_name, vpreds, returns, lr, reward_num):
@@ -214,6 +213,8 @@ class Model(object):
             restores = []
             for p, loaded_p in zip(params, loaded_params):
                 find_vf = p.name.find('vf')
+                # if find_vf != -1:
+                #     print(p.name, loaded_p)
                 if load_value == False and find_vf != -1:
                     continue
 
@@ -295,6 +296,7 @@ class Model(object):
         self.load = load
         self.replace_params = replace_params
         self.get_current_params = get_current_params
+        self.get_all_output = act_model.get_all_output
 
         if need_summary:
             # self.summary_writer = tf.summary.FileWriter('../model/log', sess.graph)   
@@ -358,21 +360,21 @@ class Runner(object):
             # print(self.dones, rewards)
 
             rewards = rewards[:,:-1]
-            # rewards = np.clip(rewards, -5, 5)
-            ##########################################################
-            ### for roboschool
-            # v_preds = []
-            # for i in range(len(self.dones)):
-            #     if self.dones[i]:
-            #         # # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
-            #         # # print(rewards[0], values[0])
-            #         if v_preds == []:
-            #             v_preds = self.model.value(self.obs)
-            #         if rewards[i][0] > 0:  
-            #             rewards[i] += self.gamma*v_preds[i] 
-            #         else:
-            #             rewards[i][2:] += self.gamma*v_preds[i][2:]
-            #         # rewards[i] += self.gamma*v_preds[i] 
+            # # rewards = np.clip(rewards, -5, 5)
+            # ##########################################################
+            ## for roboschool
+            v_preds = []
+            for i in range(len(self.dones)):
+                if self.dones[i]:
+                    # # # print(mins[:,0], maxs[:,0], values[:,0], rewards[:,0])
+                    # # # print(rewards[0], values[0])
+                    if v_preds == []:
+                        v_preds = self.model.value(self.obs)
+                    # if rewards[i][0] > 0:  
+                    #     rewards[i] += self.gamma*v_preds[i] 
+                    # else:
+                    #     rewards[i][2:] += self.gamma*v_preds[i][2:]
+                    rewards[i] += self.gamma*v_preds[i] 
 
             # if t%100 == 0:
             #     print(t/self.nsteps, time.time() - t_s)
@@ -561,7 +563,13 @@ def compute_advs( advs_ori, dir_w):
         # , advs[t]
         # )
 
-    advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+    # advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+    # advs = np.clip(advs, -5, 5)
+    # for t in range(len(advs_ori)):
+    #     if advs[t] < 0:
+    #         advs[t] = -1
+    #     elif advs[t] > 0:
+    #         advs[t] = 1
     # advs = advs / (advs.std() + 1e-8)
 
     # for t in range(len(advs_ori)):
