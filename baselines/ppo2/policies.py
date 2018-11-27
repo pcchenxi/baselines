@@ -3,6 +3,7 @@ import tensorflow as tf
 from baselines.a2c.utils import conv, fc, conv_to_fc, batch_to_seq, seq_to_batch, lstm, lnlstm
 from baselines.common.distributions import make_pdtype
 
+
 def nature_cnn(unscaled_images):
     """
     CNN from Nature paper.
@@ -129,38 +130,59 @@ class CnnPolicy(object):
         self.step = step
         self.value = value
 
+
+activ = tf.nn.relu
 class MlpPolicy(object):
+    def create_obs_feature_net(self, obs, reuse=False):
+        with tf.variable_scope('obs_feature', reuse=reuse):        
+            h1_obsf = activ(fc(obs, 'obs_f_h1', nh=64, init_scale=np.sqrt(2)))
+            h2_obsf = activ(fc(h1_obsf, 'obs_f_h2', nh=32, init_scale=np.sqrt(2)))
+            obs_feature = fc(h2_obsf, 'obs_feature', 32)
+        return obs_feature
+
     def __init__(self, sess, ob_space, ac_space, REWARD_NUM, reuse=False, model_name="model"): #pylint: disable=W0613
         # with tf.device('/device:GPU:0'):
-        # print('ob_space.shape', ob_space.shape)
         ob_shape = (None,) + ob_space.shape
+        ac_shape = (None,) + ac_space.shape
+        print('ob_space.shape', ob_space.shape)
+
         actdim = ac_space.shape[0]
         X = tf.placeholder(tf.float32, ob_shape, name='Ob') #obs
-        vf = []
+        X_NEXT = tf.placeholder(tf.float32, ob_shape, name='Ob_next') #obs
+
+        A = tf.placeholder(tf.float32, ac_shape, name='action') #obs   train_model.pdtype.sample_placeholder([None])
+        
         with tf.variable_scope(model_name, reuse=reuse):
             with tf.variable_scope('actor', reuse=reuse):
-                activ = tf.nn.relu
-                h1 = activ(fc(X, 'pi_fc1', nh=256, init_scale=np.sqrt(2)))
-                h2 = activ(fc(h1, 'pi_fc2', nh=128, init_scale=np.sqrt(2)))
-                pi = fc(h2, 'pi', actdim, init_scale=0.01)
+                h1_act = activ(fc(X, 'pi_fc1', nh=256, init_scale=np.sqrt(2)))
+                h2_act = activ(fc(h1_act, 'pi_fc2', nh=128, init_scale=np.sqrt(2)))
+                pi = fc(h2_act, 'pi', actdim, init_scale=0.01)
                 logstd = tf.get_variable(name="logstd", shape=[1, actdim],
                     initializer=tf.zeros_initializer())    
-            # for i in range(REWARD_NUM):     
-            #     with tf.variable_scope('value', reuse=reuse):        
-            #         with tf.variable_scope('value_' + str(i), reuse=reuse):
-            #             h1 = activ(fc(X, 'vf_fc1_' + str(i), nh=128, init_scale=np.sqrt(2)))
-            #             h2 = activ(fc(h1, 'vf_fc2_' + str(i), nh=64, init_scale=np.sqrt(2)))
-            #             v = fc(h2, 'vf_' + str(i), 1)
-            #             if vf == []:
-            #                 vf = v
-            #             else:
-            #                 vf = tf.concat([vf, v], axis=1)
-            #             # vf.append(v)
 
             with tf.variable_scope('value', reuse=reuse):        
-                h1 = activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
-                h2 = activ(fc(h1, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
-                vf = fc(h2, 'vf', REWARD_NUM)
+                h1_val = activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
+                h2_val = activ(fc(h1_val, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
+                vf_1 = fc(h2_val, 'vf', REWARD_NUM-1)
+                vf_ri = fc(h2_val, 'vf_ri', 1)
+
+                vf = tf.concat([vf_1, vf_ri], axis=1)      
+
+            with tf.variable_scope('inverse_dynamic', reuse=reuse): 
+                x_feature = self.create_obs_feature_net(X, reuse=False)
+                x_next_feature = self.create_obs_feature_net(X_NEXT, reuse=True)
+                combined_state_f = tf.concat([x_feature, x_next_feature], axis=1)
+
+                rp_h1 = activ(fc(combined_state_f, 'rp_h1', nh=64, init_scale=np.sqrt(2)))
+                rp_h2 = activ(fc(rp_h1, 'rp_h2', nh=64, init_scale=np.sqrt(2)))
+                inverse_dynamic_pred = fc(rp_h2, 'inverse_pred', REWARD_NUM-1)
+
+            with tf.variable_scope('forward_dynamic', reuse=reuse):   
+                state_action = tf.concat([x_feature, A], axis=1)     
+                h1_fd = activ(fc(state_action, 'fd_h1', nh=64, init_scale=np.sqrt(2)))
+                h2_fd = activ(fc(h1_fd, 'fd_h2', nh=32, init_scale=np.sqrt(2)))
+                x_next_feature_pred = fc(h2_fd, 'next_state_f', 32)
+
 
         pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
 
@@ -174,23 +196,26 @@ class MlpPolicy(object):
 
         def step(ob, *_args, **_kwargs):
             a, v, neglogp = sess.run([a0, vf, neglogp0], {X:ob})
-            # a = np.clip(a, -1, 1)
+            a = np.clip(a, -2, 2)
             return a, v, self.initial_state, neglogp
 
         def value(ob, *_args, **_kwargs):
             return sess.run(vf, {X:ob})
+
+        def get_state_action_prediction(ob, a, *_args, **_kwargs):
+            return sess.run(x_next_feature_pred, {X:ob, A:a})
+
+        def get_state_feature(ob, *_args, **_kwargs):
+            return sess.run(x_feature, {X:ob})
 
         def step_max(ob, *_args, **_kwargs):
             a, v, neglogp = sess.run([a1, vf, neglogp0], {X:ob})
             # a = np.clip(a, -1, 1)
             return a, v, self.initial_state, neglogp
 
-        def get_all_output(ob, *_args, **_kwargs):
-            h1_r, h1_r, pi_r = sess.run([h1, h2, pi], {X:ob})
-            # a = np.clip(a, -1, 1)
-            return [h1_r, h1_r, pi_r]
-
         self.X = X
+        self.X_NEXT = X_NEXT
+        self.A = A
         self.pi = pi
         self.std = self.pd.std
         self.vf = vf
@@ -198,5 +223,12 @@ class MlpPolicy(object):
         self.step_max = step_max
         self.value = value
         self.mean = a1
-        self.get_all_output = get_all_output
+
+        self.inverse_dynamic_pred = inverse_dynamic_pred
+        self.x_feature = x_feature
+        self.x_next_feature = x_next_feature
+        self.x_next_feature_pred = x_next_feature_pred
+
+        self.state_feature = get_state_feature
+        self.state_action_pred = get_state_action_prediction
 

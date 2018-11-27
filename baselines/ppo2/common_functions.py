@@ -9,7 +9,7 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 comm_rank = comm.Get_rank()
 
-REWARD_NUM = 6
+REWARD_NUM = 4
 
 class Model(object):
     def build_value_loss(self, model_name, vpreds, returns, lr, reward_num):
@@ -54,16 +54,16 @@ class Model(object):
         act_model = policy(sess, ob_space, ac_space, REWARD_NUM, reuse=False, model_name = model_name)
         train_model = policy(sess, ob_space, ac_space, REWARD_NUM, reuse=True, model_name = model_name)
 
-        A = train_model.pdtype.sample_placeholder([None])
+        # A = train_model.pdtype.sample_placeholder([None])
         ADV = tf.placeholder(tf.float32, [None], name='ph_adv')
-        REWARD = tf.placeholder(tf.float32, [None, 1], name='ph_Rew')
+        REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
         RETRUN = tf.placeholder(tf.float32, reward_size, name='ph_R')
         OLDNEGLOGPAC = tf.placeholder(tf.float32, [None], name='ph_old_neglogpac')
         OLDVPRED = tf.placeholder(tf.float32, reward_size, name='ph_oldvpred')
         LR = tf.placeholder(tf.float32, [], name='ph_lr')
         CLIPRANGE = tf.placeholder(tf.float32, [], name='ph_cliprange')
 
-        neglogpac = train_model.pd.neglogp(A)
+        neglogpac = train_model.pd.neglogp(train_model.A)
         entropy = tf.reduce_mean(train_model.pd.entropy())
 
         vpred = train_model.vf
@@ -85,17 +85,42 @@ class Model(object):
 
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
-        loss_v_ret = tf.reduce_mean(tf.square(train_model.vf_ret - REWARD))
+        loss_inverse = tf.reduce_mean(tf.square(train_model.inverse_dynamic_pred - train_model.A))
+        loss_forward = tf.reduce_mean(tf.square(train_model.x_next_feature_pred - REWARD))
 
-        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
+        self.loss_names = ['policy_loss', 'value_loss', 'inverse_loss', 'forward_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
 
         with tf.variable_scope(model_name):
             params = tf.trainable_variables(scope=model_name)
             params_actor = tf.trainable_variables(scope=model_name+'/actor')
             params_value = tf.trainable_variables(scope=model_name+'/value')
-            params_value_ret = tf.trainable_variables(scope=model_name+'/value_ret')
-            print(params_value_ret)
+            params_inverse = tf.trainable_variables(scope=model_name+'/inverse_dynamic')
+            params_forward = tf.trainable_variables(scope=model_name+'/forward_dynamic')
+            # print(params_inverse)
+            # print(params_forward)
 
+        grads_a = tf.gradients(loss_a, params_actor)
+        max_grad_norm = 10
+        if max_grad_norm is not None:
+            grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
+        grads_a = list(zip(grads_a, params_actor))
+        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        train_a = optimizer_a.apply_gradients(grads_a)
+
+
+        # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
+
+        optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        train_v = optimizer_v.minimize(loss_v, var_list=params_value)
+
+        optimizer_inverse = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        train_inverse = optimizer_inverse.minimize(loss_inverse, var_list=params_inverse)
+
+        optimizer_forward = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+        train_forward = optimizer_forward.minimize(loss_forward, var_list=params_forward)
+
+        ############################################################################################
         network_params_all = []
         for param in params:
             layer_params = tf.placeholder(tf.float32, param.shape)
@@ -119,50 +144,21 @@ class Model(object):
         restores_value = []
         for p, loaded_p in zip(params_value, network_params_value):
             restores_value.append(p.assign(loaded_p)) 
+        ############################################################################################
 
 
-        grads_a = tf.gradients(loss_a, params_actor)
-        # grads_v = tf.gradients(loss_v, params_value)
-        max_grad_norm = 0.0005
-        if max_grad_norm is not None:
-            grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
-            # grads_v, _grad_norm_v = tf.clip_by_global_norm(grads_v, max_grad_norm)
-        grads_a = list(zip(grads_a, params_actor))
-        # grads_v = list(zip(grads_v, params_value))
-        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_a = optimizer_a.apply_gradients(grads_a)
-        # optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        # train_v = optimizer_a.apply_gradients(grads_v)
-
-        # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
-
-        optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_v = optimizer_v.minimize(loss_v, var_list=params_value)
-
-        optimizer_v_ret = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_v_ret = optimizer_v_ret.minimize(loss_v_ret, var_list=params_value_ret)
-
-        def train(lr, cliprange, obs, returns, actions, values, advs, rewards, neglogpacs, states=None, train_type='all'):
+        def train(lr, cliprange, obs, obs_next, returns, actions, values, advs, rewards, neglogpacs, states=None, train_type='all'):
             # advs_suggest = advs_suggest / (advs_suggest.std() + 1e-8)
             # obs_ret = np.concatenate((obs, returns[:, 0:-1]), axis=1)
             obs_ret = np.concatenate((obs, actions), axis=1)
-            td_map = {train_model.X:obs, train_model.X_RETS:obs_ret, A:actions, ADV:advs, RETRUN:returns, REWARD:rewards, LR:lr,
-                        CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
-            rew_pred, rew, loss = sess.run([train_model.vf_ret, REWARD, loss_v_ret],
-                    td_map)
-            # print(loss)
-            # print(obs_ret.shape, obs.shape)
+
             if train_type == 'all':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
-                td_map = {train_model.X:obs, train_model.X_RETS:obs_ret, A:actions, ADV:advs, RETRUN:returns, REWARD:rewards, LR:lr,
+                td_map = {train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns, REWARD:rewards, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
-                if states is not None:
-                    td_map[train_model.S] = states
-                    td_map[train_model.M] = masks
 
                 return sess.run(
-                    [pg_loss, loss_v, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_v_ret],
+                    [pg_loss, loss_v, loss_inverse, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_forward],
                     td_map                
                 )[:-3]
             elif train_type == 'actor':
@@ -172,33 +168,19 @@ class Model(object):
 
                 td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
-                if states is not None:
-                    td_map[train_model.S] = states
-                    td_map[train_model.M] = masks
-                # ratio_ = sess.run(ratio, td_map)
-                # print('ratio', ratio_)
-                # print(sess.run(
-                #     vf_loss_list,
-                #     td_map                
-                # ))
 
                 return sess.run(
                     [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_a],
                     td_map                
                 )[:-1]
             elif train_type == 'value':
-                td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
+                td_map = {train_model.X:obs, train_model.A:actions, ADV:advs, RETRUN:returns, REWARD:rewards, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}                
-                # td_map = {train_model.X:obs, RETRUN:returns, LR:lr,
-                #         CLIPRANGE:cliprange, OLDVPRED:values}
-                if states is not None:
-                    td_map[train_model.S] = states
-                    td_map[train_model.M] = masks
 
                 return sess.run(
-                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_v],
+                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_v, train_v_ret],
                     td_map                
-                )[:-1]
+                )[:-2]
             else:
                 print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! wrong train_type !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
@@ -294,7 +276,8 @@ class Model(object):
         self.step = act_model.step
         self.step_max = act_model.step_max
         self.value = act_model.value
-        self.value_ret = act_model.value_ret
+        self.state_action_pred = act_model.state_action_pred
+        self.state_feature = act_model.state_feature
         self.get_neglogpac = get_neglogpac
         self.get_actions_dist = get_actions_dist
 
@@ -303,7 +286,6 @@ class Model(object):
         self.load = load
         self.replace_params = replace_params
         self.get_current_params = get_current_params
-        self.get_all_output = act_model.get_all_output
 
         if need_summary:
             # self.summary_writer = tf.summary.FileWriter('../model/log/exp/puck/normal', sess.graph)   
@@ -332,15 +314,19 @@ class Runner(object):
         self.nenv = nenv
         self.obs = np.zeros((nenv,) + env.observation_space.shape, dtype=model.train_model.X.dtype.name)
         self.obs[:] = env.reset()
-        self.gamma = np.array(gamma)
+        self.gamma = np.full(REWARD_NUM, gamma)
+        self.gamma[-1] = 0.97
         self.lam = lam
         self.nsteps = nsteps
         self.states = model.initial_state
         self.dones = [False for _ in range(nenv)]
 
+        self.ref_point_min = np.full(REWARD_NUM-1, 10000)
+        self.ref_point_max = np.full(REWARD_NUM-1, -10000)
+
     def run(self, nsteps, is_test = False, use_deterministic = False):
 
-        mb_obs, mb_rewards, mb_actions, mb_values, mb_values_next, mb_dones, mb_neglogpacs = [],[],[],[],[],[],[]
+        mb_obs, mb_obs_next, mb_rewards, mb_actions, mb_values, mb_values_next, mb_dones, mb_neglogpacs = [],[],[],[],[],[],[],[]
         mb_infos = []
         mb_states = self.states
         epinfos = []
@@ -348,6 +334,8 @@ class Runner(object):
         t_s = time.time()
         ret = False
         # self.obs[:] = self.env.reset()
+        print(self.ref_point_max)
+        print(self.ref_point_min)
         for t in range(nsteps):
             if use_deterministic:
                 actions, values, self.states, neglogpacs = self.model.step_max(self.obs, self.states, self.dones)
@@ -361,19 +349,44 @@ class Runner(object):
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
 
-            obs_ret = np.concatenate((self.obs, actions), axis=1)
-            rews_pred = self.model.value_ret(obs_ret)
+            next_statef_pred = self.model.state_action_pred(self.obs, actions)
 
             self.obs[:], rewards, self.dones, infos = self.env.step(actions)
-            values_next = self.model.value(self.obs)
-            # print(values_next)
-            mb_values_next.append(values_next.copy())
-
             rewards = rewards[:,:-1]
-            # rewards_diff = rews_pred - rewards[:,0:1]
+            values_next = np.zeros(rewards.shape)            
+            mb_obs_next.append(self.obs.copy())
+
+
+            ##############################################################
+            next_statef = self.model.state_feature(self.obs)
+            # diff_f = next_statef_pred - next_statef
+            diff_f = next_statef_pred - rewards[:, :-1]
+
+            rewards_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
+
+            # print(values_next)
+
+            # value_pred_next = self.model.value(self.obs)
+            # rewards_diff = value_pred_next[:, :-1] - rews_pred #mb_obs_next[:,0:-1]
             # rewards_norm = np.sqrt(np.sum(rewards_diff*rewards_diff, axis=1))
-            # rewards[:,-1] = rewards_norm  
-            # print(rewards[0], rews_pred[0], rewards_diff[0], rewards_norm.max())
+
+            rewards[:,-1] = rewards_norm  
+            # print(rewards_norm[10])
+
+            # ##########################################################
+            ## for roboschool
+            v_preds = []
+            for i in range(len(self.dones)):
+                if self.dones[i]:
+                    if v_preds == []:
+                        v_preds = self.model.value(self.obs)
+                    # if rewards[i][0] > 0:  
+                    #     rewards[i] += self.gamma*v_preds[i] 
+                    # else:
+                    #     rewards[i][2:] += self.gamma*v_preds[i][2:]
+                    values_next[i] = self.gamma*v_preds[i] 
+                    values_next[-1] = 0
+            mb_values_next.append(values_next.copy())
 
             for info in infos:
                 maybeepinfo = info.get('episode')
@@ -393,6 +406,7 @@ class Runner(object):
         # print(1, time.time() - t_s, len(mb_rewards))
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
+        mb_obs_next = np.asarray(mb_obs_next, dtype=self.obs.dtype)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
         mb_actions = np.asarray(mb_actions)
         mb_values = np.asarray(mb_values, dtype=np.float32)
@@ -410,31 +424,23 @@ class Runner(object):
 
         for t in reversed(range(len(mb_values))):
             nextnonterminal = np.zeros(last_values.shape)
-            terminate_bst = np.zeros(last_values.shape)
             if t == len(mb_values) - 1:
-                # nextnonterminal = 1.0 - self.dones
                 for l in range(len(nextnonterminal[0])):
                     nextnonterminal[:,l] = 1.0 - self.dones
                 nextvalues = last_values
             else:
                 for l in range(len(nextnonterminal[0])):
                     nextnonterminal[:,l] = 1.0 - mb_dones[t+1]    
-                    for m in range(len(mb_dones[t+1])):
-                        if mb_dones[t+1][m] == 1:
-                            terminate_bst[m] = self.gamma * mb_values_next[t, m]
-                # nextnonterminal = 1.0 - mb_dones[t+1]
                 nextvalues = mb_values[t+1]
 
-                # print(mb_dones[t+1], terminate_bst)
-
-            delta = mb_rewards[t] + terminate_bst + self.gamma * nextvalues * nextnonterminal - mb_values[t]
+            delta = mb_rewards[t] + mb_values_next[t] + self.gamma * nextvalues * nextnonterminal - mb_values[t]
 
             mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
-            # print(delta, nextvalues, mb_values[t], self.gamma, nextnonterminal, mb_rewards[t])
-            # print(mb_advs[t])
+
         mb_returns = mb_advs + mb_values
 
-        return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
+
+        return (*map(sf01, (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
             mb_states, epinfos, ret)
 
 def sf01(arr):
@@ -497,11 +503,11 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
 
 
 def nimibatch_update(   nbatch, noptepochs, nbatch_train,
-                        obs, returns, masks, actions, values, advs, rewards, neglogpacs,
+                        obs, obs_next, returns, actions, values, advs, rewards, neglogpacs,
                         lrnow, cliprangenow, states, nsteps, model, update_type = 'all', allow_early_stop = True):
     mblossvals = []
-    rewards = rewards[:,0:1]
     nbatch_train = int(nbatch_train)
+    rewards = rewards[:, :-1]
     if states is None: # nonrecurrent version
         # inds = np.arange(nbatch)
         inds = np.arange(len(obs))
@@ -513,36 +519,10 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
                 params_all_base = model.get_current_params(params_type='all')
                 end = start + nbatch_train
                 mbinds = inds[start:end]
-                slices = (arr[mbinds] for arr in (obs, returns, actions, values, advs, rewards, neglogpacs))
+                slices = (arr[mbinds] for arr in (obs, obs_next, returns, actions, values, advs, rewards, neglogpacs))
 
                 losses = model.train(lrnow, cliprangenow, *slices, train_type=update_type)
                 mblossvals.append(losses)
-                # if not allow_early_stop:
-                # print(losses)
-                if losses[3] > 0.2:
-                    print(losses)
-                    model.replace_params(params_all_base, params_type='all') 
-                    early_stop = True
-                    # break
-            if early_stop:
-                print('stoped at ep ',ep)
-                break
-                    
-    else: # recurrent version
-        assert nenvs % nminibatches == 0
-        envsperbatch = nenvs // nminibatches
-        envinds = np.arange(nenvs)
-        flatinds = np.arange(nenvs * nsteps).reshape(nenvs, nsteps)
-        envsperbatch = nbatch_train // nsteps
-        for ep in range(noptepochs):
-            np.random.shuffle(envinds)
-            for start in range(0, nenvs, envsperbatch):
-                end = start + envsperbatch
-                mbenvinds = envinds[start:end]
-                mbflatinds = flatinds[mbenvinds].ravel()
-                slices = (arr[mbflatinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
-                mbstates = states[mbenvinds]
-                mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
 
     lossvals = np.mean(mblossvals, axis=0)
     return lossvals

@@ -136,7 +136,8 @@ def demo_run(model_index):
 def run_test():
     # env = gym.make("hockeypuck-v0")
     # env.seed()
-    env = gym.make("FetchPush-v1")
+    # RoboschoolHumanoidFlagrunHarder
+    env = gym.make("FetchSlide-v1")
 
     policy = MlpPolicy
     ob_space = env.observation_space
@@ -151,19 +152,31 @@ def run_test():
     model = make_model('model', need_summary = False)
 
     model_path = '/home/xi/workspace/model/checkpoints/0'
+    # model_path = '/home/xi/workspace/model/log/exp/puck/normal/c_driven/checkpoint/1000'
+    
     model.load(model_path)
     env.reset()
     obs = env.reset()
     states = model.initial_state
 
-    for _ in range(100):
+    for j in range(100):
+        if j %5 == 0:
+            env.seed()
         obs = env.reset()
-        for i in range(80):
+        print('')
+        for i in range(100):
             actions, values, states, neglogpacs = model.step([obs], states, False)
+            next_statef_pred = model.state_action_pred([obs], actions)
 
             obs, r, done, _ = env.step(actions[0])
+
+            ##############################################################
+            next_statef = model.state_feature([obs])
+            diff_f = next_statef_pred[0] - r[:-2]
+            rewards_norm = np.sqrt(np.sum(diff_f*diff_f))
+
             env.render('human')
-            print(r, values)
+            print(actions, r, diff_f, rewards_norm)
             if done:
                 # print('length', i, 'reward', r)
                 # for _ in range(10):

@@ -24,6 +24,8 @@ def worker(remote, parent_remote, env_fn_wrapper):
             break
         elif cmd == 'get_spaces':
             remote.send((env.observation_space, env.action_space))
+        elif cmd == 'seed':
+            env.seed()
         else:
             raise NotImplementedError
 
@@ -64,6 +66,10 @@ class SubprocVecEnv(VecEnv):
         for remote in self.remotes:
             remote.send(('reset', None))
         return np.stack([remote.recv() for remote in self.remotes])
+
+    def seed(self):
+        for remote in self.remotes:
+            remote.send(('seed', None))
 
     def reset_task(self):
         for remote in self.remotes:
