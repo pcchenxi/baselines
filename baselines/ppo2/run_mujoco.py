@@ -26,7 +26,7 @@ def train(env_id, num_timesteps, seed):
     def make_env():
         #env = gym.make(env_id)
         # env = gym.make("hockeypuck-v0")
-        env = gym.make("FetchSlide-v1")
+        env = gym.make("FetchPickAndPlace-v1")
         env = bench.Monitor(env, logger.get_dir(), allow_early_resets=True)
         return env
 

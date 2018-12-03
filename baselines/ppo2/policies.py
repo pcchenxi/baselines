@@ -149,6 +149,7 @@ class MlpPolicy(object):
         actdim = ac_space.shape[0]
         X = tf.placeholder(tf.float32, ob_shape, name='Ob') #obs
         X_NEXT = tf.placeholder(tf.float32, ob_shape, name='Ob_next') #obs
+        REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
 
         A = tf.placeholder(tf.float32, ac_shape, name='action') #obs   train_model.pdtype.sample_placeholder([None])
         
@@ -171,17 +172,24 @@ class MlpPolicy(object):
             with tf.variable_scope('inverse_dynamic', reuse=reuse): 
                 x_feature = self.create_obs_feature_net(X, reuse=False)
                 x_next_feature = self.create_obs_feature_net(X_NEXT, reuse=True)
-                combined_state_f = tf.concat([x_feature, x_next_feature], axis=1)
+                x_next_feature_reward = tf.concat([x_next_feature, REWARD], axis=1)
+                x_next_feature_reward_fc = fc(x_next_feature_reward, 'next_f_r_fc', 32)
+                combined_state_f = tf.concat([x_feature, x_next_feature_reward_fc], axis=1)
 
                 rp_h1 = activ(fc(combined_state_f, 'rp_h1', nh=64, init_scale=np.sqrt(2)))
-                rp_h2 = activ(fc(rp_h1, 'rp_h2', nh=64, init_scale=np.sqrt(2)))
-                inverse_dynamic_pred = fc(rp_h2, 'inverse_pred', REWARD_NUM-1)
+                rp_h2 = activ(fc(rp_h1, 'rp_h2', nh=32, init_scale=np.sqrt(2)))
+                inverse_dynamic_pred = fc(rp_h2, 'inverse_pred', ac_space.shape[0])
+                # inverse_dynamic_pred = fc(rp_h2, 'inverse_pred', REWARD_NUM-1)
 
             with tf.variable_scope('forward_dynamic', reuse=reuse):   
                 state_action = tf.concat([x_feature, A], axis=1)     
+                next_state_reward = tf.concat([x_next_feature, REWARD], axis=1)   
+
                 h1_fd = activ(fc(state_action, 'fd_h1', nh=64, init_scale=np.sqrt(2)))
                 h2_fd = activ(fc(h1_fd, 'fd_h2', nh=32, init_scale=np.sqrt(2)))
                 x_next_feature_pred = fc(h2_fd, 'next_state_f', 32)
+                # x_next_feature_pred = fc(h2_fd, 'next_state_f', REWARD_NUM-1)
+
 
 
         pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
@@ -202,17 +210,22 @@ class MlpPolicy(object):
         def value(ob, *_args, **_kwargs):
             return sess.run(vf, {X:ob})
 
-        def get_state_action_prediction(ob, a, *_args, **_kwargs):
-            return sess.run(x_next_feature_pred, {X:ob, A:a})
+        def get_state_action_prediction(ob, action, *_args, **_kwargs):
+            # return sess.run(x_next_feature_pred, {X:ob, REWARD:reward})
+            return sess.run(x_next_feature_pred, {X:ob, A:action})
 
         def get_state_feature(ob, *_args, **_kwargs):
             return sess.run(x_feature, {X:ob})
+
+        def get_next_state_feature(ob, reward, *_args, **_kwargs):
+            return sess.run(x_next_feature_reward_fc, {X_NEXT:ob, REWARD:reward})
 
         def step_max(ob, *_args, **_kwargs):
             a, v, neglogp = sess.run([a1, vf, neglogp0], {X:ob})
             # a = np.clip(a, -1, 1)
             return a, v, self.initial_state, neglogp
 
+        self.REWARD = REWARD
         self.X = X
         self.X_NEXT = X_NEXT
         self.A = A
@@ -226,9 +239,10 @@ class MlpPolicy(object):
 
         self.inverse_dynamic_pred = inverse_dynamic_pred
         self.x_feature = x_feature
-        self.x_next_feature = x_next_feature
+        self.x_next_feature = x_next_feature_reward_fc
         self.x_next_feature_pred = x_next_feature_pred
 
         self.state_feature = get_state_feature
         self.state_action_pred = get_state_action_prediction
+        self.next_state_feature = get_next_state_feature
 

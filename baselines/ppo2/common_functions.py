@@ -9,7 +9,7 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 comm_rank = comm.Get_rank()
 
-REWARD_NUM = 4
+REWARD_NUM = 5
 
 class Model(object):
     def build_value_loss(self, model_name, vpreds, returns, lr, reward_num):
@@ -56,7 +56,7 @@ class Model(object):
 
         # A = train_model.pdtype.sample_placeholder([None])
         ADV = tf.placeholder(tf.float32, [None], name='ph_adv')
-        REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
+        # REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
         RETRUN = tf.placeholder(tf.float32, reward_size, name='ph_R')
         OLDNEGLOGPAC = tf.placeholder(tf.float32, [None], name='ph_old_neglogpac')
         OLDVPRED = tf.placeholder(tf.float32, reward_size, name='ph_oldvpred')
@@ -86,7 +86,7 @@ class Model(object):
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
         loss_inverse = tf.reduce_mean(tf.square(train_model.inverse_dynamic_pred - train_model.A))
-        loss_forward = tf.reduce_mean(tf.square(train_model.x_next_feature_pred - REWARD))
+        loss_forward = tf.reduce_mean(tf.square(train_model.x_next_feature_pred - train_model.x_next_feature))
 
         self.loss_names = ['policy_loss', 'value_loss', 'inverse_loss', 'forward_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
 
@@ -100,7 +100,7 @@ class Model(object):
             # print(params_forward)
 
         grads_a = tf.gradients(loss_a, params_actor)
-        max_grad_norm = 10
+        max_grad_norm = 1
         if max_grad_norm is not None:
             grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
         grads_a = list(zip(grads_a, params_actor))
@@ -154,13 +154,13 @@ class Model(object):
 
             if train_type == 'all':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
-                td_map = {train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns, REWARD:rewards, LR:lr,
+                td_map = {train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns, train_model.REWARD:rewards, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
 
                 return sess.run(
-                    [pg_loss, loss_v, loss_inverse, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_forward],
+                    [pg_loss, loss_v, loss_inverse, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_inverse, train_forward],
                     td_map                
-                )[:-3]
+                )[:-4]
             elif train_type == 'actor':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)
                 # advs = advs / np.abs(advs).max()
@@ -174,7 +174,7 @@ class Model(object):
                     td_map                
                 )[:-1]
             elif train_type == 'value':
-                td_map = {train_model.X:obs, train_model.A:actions, ADV:advs, RETRUN:returns, REWARD:rewards, LR:lr,
+                td_map = {train_model.X:obs, train_model.A:actions, ADV:advs, RETRUN:returns, train_model.REWARD:rewards, LR:lr,
                         CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}                
 
                 return sess.run(
@@ -278,6 +278,7 @@ class Model(object):
         self.value = act_model.value
         self.state_action_pred = act_model.state_action_pred
         self.state_feature = act_model.state_feature
+        self.next_state_feature = act_model.next_state_feature
         self.get_neglogpac = get_neglogpac
         self.get_actions_dist = get_actions_dist
 
@@ -315,7 +316,7 @@ class Runner(object):
         self.obs = np.zeros((nenv,) + env.observation_space.shape, dtype=model.train_model.X.dtype.name)
         self.obs[:] = env.reset()
         self.gamma = np.full(REWARD_NUM, gamma)
-        self.gamma[-1] = 0.97
+        self.gamma[-1] = 0.98
         self.lam = lam
         self.nsteps = nsteps
         self.states = model.initial_state
@@ -350,17 +351,23 @@ class Runner(object):
             mb_dones.append(self.dones)
 
             next_statef_pred = self.model.state_action_pred(self.obs, actions)
+            obs_pre = self.obs.copy()
 
-            self.obs[:], rewards, self.dones, infos = self.env.step(actions)
+            actions_send = actions.copy()
+            actions_send[:, -1] *= 0.1
+            self.obs[:], rewards, self.dones, infos = self.env.step(actions_send)
             rewards = rewards[:,:-1]
             values_next = np.zeros(rewards.shape)            
             mb_obs_next.append(self.obs.copy())
 
+            # next_statef_pred = self.model.state_action_pred(obs_pre, rewards[:,:-1])
 
             ##############################################################
-            next_statef = self.model.state_feature(self.obs)
-            # diff_f = next_statef_pred - next_statef
-            diff_f = next_statef_pred - rewards[:, :-1]
+            # next_statef = self.model.state_feature(self.obs)
+            # next_statef = np.concatenate((next_statef, rewards[:, 0:-1]), axis=1)
+            next_statef = self.model.next_state_feature(self.obs, rewards[:,:-1])
+            diff_f = next_statef_pred - next_statef
+            # diff_f = next_statef_pred - rewards[:, :-1]
 
             rewards_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
 
@@ -385,7 +392,7 @@ class Runner(object):
                     # else:
                     #     rewards[i][2:] += self.gamma*v_preds[i][2:]
                     values_next[i] = self.gamma*v_preds[i] 
-                    values_next[-1] = 0
+                    values_next[:,-1] = 0
             mb_values_next.append(values_next.copy())
 
             for info in infos:

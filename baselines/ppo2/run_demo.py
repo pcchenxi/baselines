@@ -136,8 +136,8 @@ def demo_run(model_index):
 def run_test():
     # env = gym.make("hockeypuck-v0")
     # env.seed()
-    # RoboschoolHumanoidFlagrunHarder
-    env = gym.make("FetchSlide-v1")
+    # RoboschoolHumanoidFlagrunHarder  FetchSlide
+    env = gym.make("FetchPickAndPlace-v1")
 
     policy = MlpPolicy
     ob_space = env.observation_space
@@ -166,17 +166,22 @@ def run_test():
         print('')
         for i in range(100):
             actions, values, states, neglogpacs = model.step([obs], states, False)
-            next_statef_pred = model.state_action_pred([obs], actions)
-
+            next_statef_pred  = model.state_action_pred([obs], actions)
+            obs_pre = obs.copy()
+            actions[0][-1] *= 0.1
             obs, r, done, _ = env.step(actions[0])
+            # next_statef_pred = model.state_action_pred([obs_pre], [r[:-2]])
 
             ##############################################################
-            next_statef = model.state_feature([obs])
-            diff_f = next_statef_pred[0] - r[:-2]
+            # next_statef = model.state_feature([obs])
+            # next_statef = np.concatenate((next_statef, np.asarray([r])[:, 0:-2]), axis=1)
+            next_statef = model.next_state_feature([obs], [r[:-2]])
+
+            diff_f = next_statef_pred[0] - next_statef#r[:-2]
             rewards_norm = np.sqrt(np.sum(diff_f*diff_f))
 
             env.render('human')
-            print(actions, r, diff_f, rewards_norm)
+            print(r, rewards_norm)
             if done:
                 # print('length', i, 'reward', r)
                 # for _ in range(10):
