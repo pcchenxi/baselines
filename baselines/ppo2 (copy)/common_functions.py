@@ -9,7 +9,7 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 comm_rank = comm.Get_rank()
 
-REWARD_NUM = 5
+REWARD_NUM = 7
 
 class Model(object):
     def build_value_loss(self, model_name, vpreds, returns, lr, reward_num):
@@ -32,7 +32,7 @@ class Model(object):
         return train_v_list, vf_loss_list, vf_loss_sum   
 
 
-    def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
+    def __init__(self, *, policy, ob_space, ac_space, goal_space, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, model_name, lr, need_summary = False):
         
         reward_size = [None, REWARD_NUM]
@@ -51,8 +51,7 @@ class Model(object):
 
         # sess = tf.get_default_session(config=config)
 
-        act_model = policy(sess, ob_space, ac_space, REWARD_NUM, reuse=False, model_name = model_name)
-        train_model = policy(sess, ob_space, ac_space, REWARD_NUM, reuse=True, model_name = model_name)
+        train_model = policy(sess, ob_space, ac_space, goal_space, REWARD_NUM, reuse=False, model_name = model_name)
 
         # A = train_model.pdtype.sample_placeholder([None])
         ADV = tf.placeholder(tf.float32, [None], name='ph_adv')
@@ -91,11 +90,11 @@ class Model(object):
         self.loss_names = ['policy_loss', 'value_loss', 'inverse_loss', 'forward_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
 
         with tf.variable_scope(model_name):
-            params = tf.trainable_variables(scope=model_name)
-            params_actor = tf.trainable_variables(scope=model_name+'/actor')
-            params_value = tf.trainable_variables(scope=model_name+'/value')
-            params_inverse = tf.trainable_variables(scope=model_name+'/inverse_dynamic')
-            params_forward = tf.trainable_variables(scope=model_name+'/forward_dynamic')
+            params = tf.global_variables(scope=model_name)
+            params_actor = tf.global_variables(scope=model_name+'/actor')
+            params_value = tf.global_variables(scope=model_name+'/value')
+            params_inverse = tf.global_variables(scope=model_name+'/inverse_dynamic')
+            params_forward = tf.global_variables(scope=model_name+'/forward_dynamic')
             # print(params_inverse)
             # print(params_forward)
 
@@ -104,21 +103,28 @@ class Model(object):
         if max_grad_norm is not None:
             grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
         grads_a = list(zip(grads_a, params_actor))
-        optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_a = optimizer_a.apply_gradients(grads_a)
 
 
-        # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        print(update_ops)
 
-        optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_v = optimizer_v.minimize(loss_v, var_list=params_value)
+        with tf.control_dependencies(update_ops):
+            optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            train_a = optimizer_a.apply_gradients(grads_a)
 
-        optimizer_inverse = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_inverse = optimizer_inverse.minimize(loss_inverse, var_list=params_inverse)
 
-        optimizer_forward = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-        train_forward = optimizer_forward.minimize(loss_forward, var_list=params_forward)
+            # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
+
+            optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            train_v = optimizer_v.minimize(loss_v, var_list=params_value)
+
+            optimizer_inverse = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            train_inverse = optimizer_inverse.minimize(loss_inverse, var_list=params_inverse)
+
+            optimizer_forward = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            train_forward = optimizer_forward.minimize(loss_forward, var_list=params_forward)
+
 
         ############################################################################################
         network_params_all = []
@@ -154,35 +160,14 @@ class Model(object):
 
             if train_type == 'all':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
-                td_map = {train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns, train_model.REWARD:rewards, LR:lr,
-                        CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
+                td_map = {train_model.is_training: True, train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns, 
+                        train_model.REWARD:rewards, LR:lr, CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
 
                 return sess.run(
-                    [pg_loss, loss_v, loss_inverse, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_inverse, train_forward],
+                    [pg_loss, loss_v, loss_inverse, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_forward],
                     td_map                
-                )[:-4]
-            elif train_type == 'actor':
-                advs = (advs - advs.mean()) / (advs.std() + 1e-8)
-                # advs = advs / np.abs(advs).max()
-                # advs = np.clip(advs, -5, 5)
+                )[:-3]
 
-                td_map = {train_model.X:obs, A:actions, ADV:advs, RETRUN:returns, LR:lr,
-                        CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
-
-                return sess.run(
-                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_a],
-                    td_map                
-                )[:-1]
-            elif train_type == 'value':
-                td_map = {train_model.X:obs, train_model.A:actions, ADV:advs, RETRUN:returns, train_model.REWARD:rewards, LR:lr,
-                        CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}                
-
-                return sess.run(
-                    [pg_loss, vf_loss, entropy, approxkl, clipfrac, _grad_norm_a, train_v, train_v_ret],
-                    td_map                
-                )[:-2]
-            else:
-                print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! wrong train_type !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
         def get_neglogpac(obs, actions):
             return sess.run(neglogpac, {train_model.X:obs, A:actions})
@@ -272,17 +257,18 @@ class Model(object):
 
         self.train = train
         self.train_model = train_model
-        self.act_model = act_model
-        self.step = act_model.step
-        self.step_max = act_model.step_max
-        self.value = act_model.value
-        self.state_action_pred = act_model.state_action_pred
-        self.state_feature = act_model.state_feature
-        self.next_state_feature = act_model.next_state_feature
+        # self.act_model = act_model
+        self.step = train_model.step
+        self.step_max = train_model.step_max
+        self.value = train_model.value
+        self.state_action_pred = train_model.state_action_pred
+        self.state_feature = train_model.state_feature
+        self.next_state_feature = train_model.next_state_feature
+        self.next_action_pred = train_model.next_action_pred
         self.get_neglogpac = get_neglogpac
         self.get_actions_dist = get_actions_dist
 
-        self.initial_state = act_model.initial_state
+        self.initial_state = train_model.initial_state
         self.save = save
         self.load = load
         self.replace_params = replace_params
@@ -354,7 +340,7 @@ class Runner(object):
             obs_pre = self.obs.copy()
 
             actions_send = actions.copy()
-            actions_send[:, -1] *= 0.1
+            # actions_send[:, -1] *= 0.1
             self.obs[:], rewards, self.dones, infos = self.env.step(actions_send)
             rewards = rewards[:,:-1]
             values_next = np.zeros(rewards.shape)            
@@ -365,11 +351,15 @@ class Runner(object):
             ##############################################################
             # next_statef = self.model.state_feature(self.obs)
             # next_statef = np.concatenate((next_statef, rewards[:, 0:-1]), axis=1)
+            # action_pred = self.model.next_action_pred(obs_pre, self.obs)
             next_statef = self.model.next_state_feature(self.obs, rewards[:,:-1])
-            diff_f = next_statef_pred - next_statef
+            diff_f = (next_statef_pred - next_statef)
+            # diff_a = action_pred - actions
             # diff_f = next_statef_pred - rewards[:, :-1]
 
-            rewards_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
+            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
+            # diff_a_norm = np.sqrt(np.sum(diff_a*diff_a, axis=1))
+            rewards_norm = diff_f_norm
 
             # print(values_next)
 

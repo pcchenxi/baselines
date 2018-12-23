@@ -38,11 +38,11 @@ def train(env_id, num_timesteps, seed):
     # set_global_seeds(seed)
     policy = MlpPolicy
 
-    nsteps = 10240/ncpu
+    nsteps = 5120/ncpu
 
     ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(1024),
         lam=0.98, gamma=0.99, noptepochs=5, log_interval=1,
-        ent_coef=0.0, # 0.003,
+        ent_coef=0.0005, # 0.003,
         lr= 3e-4,
         cliprange=0.2,
         #total_timesteps=num_timesteps,

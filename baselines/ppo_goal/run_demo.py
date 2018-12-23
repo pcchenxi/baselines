@@ -8,15 +8,14 @@ import tensorflow as tf
 from baselines import logger
 from collections import deque
 from baselines.common import explained_variance
-from baselines.ppo2.ratio_functions import *
-from baselines.ppo2.common_functions import *
+from baselines.ppo_goal.common_functions import *
 
 
 import gym, roboschool, sys, os, gym_hockeypuck
 import pyglet, pyglet.window as pw, pyglet.window.key as pwk
 from pyglet import gl
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-from baselines.ppo2.policies import MlpPolicy
+from baselines.ppo_goal.policies import MlpPolicy_Goal as MlpPolicy
 
 import gym.spaces, gym.utils, gym.utils.seeding
 from roboschool.scene_abstract import cpp_household
@@ -136,16 +135,24 @@ def demo_run(model_index):
 def run_test():
     # env = gym.make("hockeypuck-v0")
     # env.seed()
-    # RoboschoolHumanoidFlagrunHarder  FetchSlide
-    env = gym.make("FetchPickAndPlace-v1")
+    # RoboschoolHumanoidFlagrunHarder  FetchSlide FetchPush FetchPickAndPlace
+    env = gym.make("FetchPush-v1")
 
     policy = MlpPolicy
-    ob_space = env.observation_space
+    ob_spaces = env.observation_space.spaces.items()
     ac_space = env.action_space
 
-    print(ac_space)
+    index = 0
+    for a in ob_spaces:
+        if index == 2:
+            ob_space = a[1]
+        else:
+            goal_space = a[1]
+        index += 1
 
-    make_model = lambda model_name, need_summary : Model(model_name=model_name, policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=1, nbatch_train=1000,
+    # print(ob_space.shape, ac_space)
+
+    make_model = lambda model_name, need_summary : Model(model_name=model_name, policy=policy, ob_space=ob_space, ac_space=ac_space, goal_space=goal_space, nbatch_act=1, nbatch_train=1000,
                     nsteps=1000, ent_coef=0, vf_coef=0, lr = 0,
                     max_grad_norm=0, need_summary = False)
 
@@ -154,41 +161,59 @@ def run_test():
     model_path = '/home/xi/workspace/model/checkpoints/0'
     # model_path = '/home/xi/workspace/model/log/exp/puck/normal/c_driven/checkpoint/1000'
     
-    model.load(model_path)
-    env.reset()
-    obs = env.reset()
-    states = model.initial_state
+    # model.load(model_path)
+    full_obs = env.reset()
+
+    sim_data = env.get_sim_data()
+    sim_goal = full_obs['desired_goal']
+    env.set_sim_data(sim_data, sim_goal)
+    # print('get data', sim_data)
+    print('goal', sim_goal)
+
+    # print(env.get_sim_data())
 
     for j in range(100):
-        if j %5 == 0:
-            env.seed()
-        obs = env.reset()
-        print('')
-        for i in range(100):
-            actions, values, states, neglogpacs = model.step([obs], states, False)
-            next_statef_pred  = model.state_action_pred([obs], actions)
-            obs_pre = obs.copy()
-            actions[0][-1] *= 0.1
-            obs, r, done, _ = env.step(actions[0])
+        full_obs = env.reset()
+        if j %3 == 0:
+            sim_data = env.get_sim_data()
+            sim_goal = full_obs['desired_goal']
+        full_obs = env.set_sim_data(sim_data, sim_goal)
+        obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+
+        for i in range(50):
+            actions, values, neglogpacs = model.step([obs])
+            # next_statef_pred  = model.state_action_pred([obs], actions)
+            # obs_pre = obs.copy()
+            # actions[0][-1] *= 0.1
+            full_obs, r, done, info = env.step(actions[0])
+
+            obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
             # next_statef_pred = model.state_action_pred([obs_pre], [r[:-2]])
 
-            ##############################################################
-            # next_statef = model.state_feature([obs])
-            # next_statef = np.concatenate((next_statef, np.asarray([r])[:, 0:-2]), axis=1)
-            next_statef = model.next_state_feature([obs], [r[:-2]])
+            # ##############################################################
+            # # next_statef = model.state_feature([obs])
+            # # next_statef = np.concatenate((next_statef, np.asarray([r])[:, 0:-2]), axis=1)
+            # action_pred = model.next_action_pred([obs_pre], [obs])
+            # next_statef = model.next_state_feature([obs], [r[:-2]])
 
-            diff_f = next_statef_pred[0] - next_statef#r[:-2]
-            rewards_norm = np.sqrt(np.sum(diff_f*diff_f))
+            # diff_f = next_statef_pred[0] - next_statef#r[:-2]
+            # diff_a = action_pred[0] - actions
+
+            # diff_f_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
+            # diff_a_norm = np.sqrt(np.sum(diff_a*diff_a, axis=1))
+
+            # rewards_norm = diff_a_norm
 
             env.render('human')
-            print(r, rewards_norm)
+            # print(r, rewards_norm, np.argmax(diff_f))
             if done:
                 # print('length', i, 'reward', r)
                 # for _ in range(10):
                 #     action = np.array([0, 0, 0, 0, 0, 0, 0])
                 #     _, r, _, _ = env.step(action)
                 
-                obs = env.reset()
+                # obs = env.reset()
+
                 break       
     env.close() 
         

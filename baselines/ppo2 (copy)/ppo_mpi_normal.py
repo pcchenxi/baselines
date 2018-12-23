@@ -65,7 +65,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     for update in range(start_update+1, nupdates+1):
         obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
-        advs = advs_ori[:, -1] #+ advs_ori[:, -2]*0.5
+        advs = advs_ori[:, -1] #+ advs_ori[:, 1]*2
         # advs = compute_advs(advs_ori, [1, -1, 1, 1, 1, 0])
 
         # for i in range(len(obs)):
