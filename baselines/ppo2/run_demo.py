@@ -8,14 +8,15 @@ import tensorflow as tf
 from baselines import logger
 from collections import deque
 from baselines.common import explained_variance
-from baselines.ppo_goal.common_functions import *
+from baselines.ppo2.ratio_functions import *
+from baselines.ppo2.common_functions import *
 
 
 import gym, roboschool, sys, os, gym_hockeypuck
 import pyglet, pyglet.window as pw, pyglet.window.key as pwk
 from pyglet import gl
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-from baselines.ppo_goal.policies import MlpPolicy_Goal as MlpPolicy
+from baselines.ppo2.policies import MlpPolicy
 
 import gym.spaces, gym.utils, gym.utils.seeding
 from roboschool.scene_abstract import cpp_household
@@ -81,7 +82,7 @@ def demo_run(model_index):
     # env = gym.make("RoboschoolAnt-v1")
     # env = gym.make("RoboschoolHalfCheetah-v1")
     # env = gym.make("LunarLanderContinuous-v2")
-    env = gym.make("RoboschoolReacher-v1")
+    env = gym.make("RoboschoolAnt-v1")
 
     policy = MlpPolicy
     ob_space = env.observation_space
@@ -90,6 +91,7 @@ def demo_run(model_index):
     make_model = lambda model_name, need_summary : Model(model_name=model_name, policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=1, nbatch_train=1000,
                     nsteps=1000, ent_coef=0, vf_coef=0, lr = 0,
                     max_grad_norm=0, need_summary = False)
+
 
     model = make_model('model'+str(model_index), need_summary = False)
     # model_index = 2
@@ -114,7 +116,7 @@ def demo_run(model_index):
     for _ in range(500):
         # actions, values, states, neglogpacs = model.step_max([obs], states, False)
         actions, values, states, neglogpacs = model.step([obs], states, False)
-        # real_value_old = model_old.value([obs])[0,0]
+
         # x, y, z = eu.body_xyz
         # eu.walk_target_x = x + 100.1*np.cos(control_me.theta)   # 1.0 or less will trigger flag reposition by env itself
         # eu.walk_target_y = y + 100.1*np.sin(control_me.theta)
@@ -136,98 +138,62 @@ def run_test():
     # env = gym.make("hockeypuck-v0")
     # env.seed()
     # RoboschoolHumanoidFlagrunHarder  FetchSlide FetchPush FetchPickAndPlace
-    env = gym.make("FetchPickAndPlace-v1")
+    env = gym.make("RoboschoolHumanoid-v1")
 
     policy = MlpPolicy
-    ob_spaces = env.observation_space.spaces.items()
+    ob_space = env.observation_space
     ac_space = env.action_space
 
-    index = 0
-    for a in ob_spaces:
-        if index == 2:
-            ob_space = a[1]
-        else:
-            goal_space = a[1]
-        index += 1
-
-    # print(ob_space.shape, ac_space)
-
-    make_model = lambda model_name, need_summary : Model(model_name=model_name, policy=policy, ob_space=ob_space, ac_space=ac_space, goal_space=goal_space, nbatch_act=1, nbatch_train=1000,
+    make_model = lambda model_name, need_summary : Model(model_name=model_name, policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=1, nbatch_train=1000,
                     nsteps=1000, ent_coef=0, vf_coef=0, lr = 0,
                     max_grad_norm=0, need_summary = False)
 
     model = make_model('model', need_summary = False)
-    # model_old = make_model('model_old', need_summary = False)
 
     model_path = '/home/xi/workspace/model/checkpoints/0'
     # model_path = '/home/xi/workspace/model/log/exp/puck/normal/c_driven/checkpoint/1000'
     
     model.load(model_path)
-
-    model_path = '/home/xi/workspace/model/checkpoints/1'    
-    # model_old.load(model_path)
-
-    full_obs = env.reset()
-
-    sim_data = env.get_sim_data()
-    sim_goal = full_obs['achieved_goal']
-    # env.set_sim_data(sim_data, sim_goal)
-    # print('get data', sim_data)
-    print('goal', sim_data[1], full_obs['desired_goal'])
+    # env.reset()
+    # obs = env.reset()
 
     # print(env.get_sim_data())
 
-    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.99)
-    # runner.init_task_pool(15, model_old, render=True)
-    obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos, ret = runner.run(int(30000), is_test=False, render=True) #pylint: disable=E0632
-    
-    # tasks = joblib.load('/home/xi/workspace/model/checkpoints/tasks')
-    # tasks_vlaue = joblib.load('/home/xi/workspace/model/checkpoints/tasks_value')
+    for j in range(1):
+        obs = env.reset()
 
-    # for j in range(100):    
-    #     print('reset')
-    #     full_obs = env.reset()   
-    #     if len(tasks) > 0 and np.random.rand() > 0.5:
-    #         task_prob = np.asarray(tasks_vlaue)
-    #         task_prob = task_prob - task_prob.min()
-    #         task_prob = task_prob/task_prob.sum()         
-    #         task_index = np.random.choice(len(tasks), 1, p=task_prob)[0]
-    #         print('restore task', task_index, tasks_vlaue[task_index], len(tasks))
-    #         task = tasks[task_index]    
-    #         full_obs = env.set_sim_data(task[0], task[1])
-    #     obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+        for i in range(2000):
+            actions, values, _, neglogpacs = model.step([obs], False)
+            # next_statef_pred  = model.state_action_pred([obs], actions)
+            obs_pre = obs.copy()
+            # actions[0][-1] *= 0.1
+            obs, r, done, _ = env.step(actions[0])
+            next_statef_pred = model.state_action_pred([obs_pre], actions)
 
-    #     for i in range(100):
-    #         current_sim_data = env.get_sim_data()
-    #         obs_pre = obs.copy()
+            # ##############################################################
+            # # next_statef = model.state_feature([obs])
+            # # next_statef = np.concatenate((next_statef, np.asarray([r])[:, 0:-2]), axis=1)
+            action_pred = model.next_action_pred([obs_pre], [obs])
+            next_statef = model.next_state_feature([obs], [r[:-2]])
 
-    #         actions, values, neglogpacs = model.step([obs])
-    #         next_statef_pred = model.state_action_pred([obs], actions)
+            diff_f = next_statef_pred[0] - next_statef#r[:-2]
+            # diff_a = action_pred[0] - actions
 
-    #         full_obs, r, done, info = env.step(actions[0])
+            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
+            # diff_a_norm = np.sqrt(np.sum(diff_a*diff_a, axis=1))
 
-    #         obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-    #         rewards = np.array([r, 0.0])
+            rewards_norm = diff_f_norm
 
-    #         next_statef = model.state_feature([obs])
-    #         diff_f = (next_statef_pred - next_statef)
-    #         diff_f_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
-    #         rewards_norm = diff_f_norm
-    #         rewards[-1] = rewards_norm
-
-    #         # if rewards_norm > 1:
-    #         #     task_obs = obs_pre
-    #         #     task_value = rewards_norm[0]
-    #         #     task = [current_sim_data, full_obs['desired_goal']]
-    #         #     tasks.append(task)
-    #         #     tasks_vlaue.append(task_value) 
-
-    #         env.render('human')
-    #         print(rewards, values)
-    #         if done:
-    #             # full_obs = env.reset()  
-    #             # full_obs = env.set_sim_data(sim_data, sim_goal)     
-    #             break       
+            env.render('human')
+            print(rewards_norm, values[0,-1])
+            if done:
+                # print('length', i, 'reward', r)
+                # for _ in range(10):
+                #     action = np.array([0, 0, 0, 0, 0, 0, 0])
+                #     _, r, _, _ = env.step(action)
+                
+                obs = env.reset()
+                break       
     env.close() 
         
 if __name__=="__main__":

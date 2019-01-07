@@ -37,9 +37,9 @@ class Model(object):
         # A = train_model.pdtype.sample_placeholder([None])
         ADV = tf.placeholder(tf.float32, [None], name='ph_adv')
         # REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
-        RETRUN = tf.placeholder(tf.float32, reward_size, name='ph_R')
+        RETRUN = tf.placeholder(tf.float32, [None, 2], name='ph_R')
         OLDNEGLOGPAC = tf.placeholder(tf.float32, [None], name='ph_old_neglogpac')
-        OLDVPRED = tf.placeholder(tf.float32, reward_size, name='ph_oldvpred')
+        OLDVPRED = tf.placeholder(tf.float32, [None, 2], name='ph_oldvpred')
         LR = tf.placeholder(tf.float32, [], name='ph_lr')
         CLIPRANGE = tf.placeholder(tf.float32, [], name='ph_cliprange')
 
@@ -64,12 +64,16 @@ class Model(object):
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
 
-        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
+        loss_forward = tf.reduce_mean(tf.square(train_model.x_next_feature_pred - train_model.x_next_feature))
+
+        self.loss_names = ['policy_loss', 'value_loss', 'forward_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
 
         with tf.variable_scope(model_name):
             params = tf.global_variables(scope=model_name)
             params_actor = tf.global_variables(scope=model_name+'/actor')
             params_value = tf.global_variables(scope=model_name+'/value')
+            params_forward = tf.global_variables(scope=model_name+'/forward_dynamic')
+
 
         grads_a = tf.gradients(loss_a, params_actor)
         max_grad_norm = 1
@@ -92,7 +96,8 @@ class Model(object):
             optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
             train_v = optimizer_v.minimize(loss_v, var_list=params_value)
 
-
+            optimizer_forward = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            train_forward = optimizer_forward.minimize(loss_forward, var_list=params_forward)
         ############################################################################################
         network_params_all = []
         for param in params:
@@ -117,10 +122,18 @@ class Model(object):
         restores_value = []
         for p, loaded_p in zip(params_value, network_params_value):
             restores_value.append(p.assign(loaded_p)) 
+
+        network_params_fm = []
+        for param in params_forward:
+            layer_params = tf.placeholder(tf.float32, param.shape)
+            network_params_fm.append(layer_params)
+        restores_fm = []
+        for p, loaded_p in zip(params_forward, network_params_fm):
+            restores_fm.append(p.assign(loaded_p)) 
         ############################################################################################
 
 
-        def train(lr, cliprange, obs, obs_next, returns, actions, values, advs, rewards, neglogpacs, train_type='all'):
+        def train(lr, cliprange, obs, obs_next, returns, actions, values, advs, neglogpacs, train_type='all'):
             # advs_suggest = advs_suggest / (advs_suggest.std() + 1e-8)
             # obs_ret = np.concatenate((obs, returns[:, 0:-1]), axis=1)
             obs_ret = np.concatenate((obs, actions), axis=1)
@@ -128,13 +141,26 @@ class Model(object):
             if train_type == 'all':
                 advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
                 td_map = {train_model.is_training: True, train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns, 
-                        train_model.REWARD:rewards, LR:lr, CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
+                        LR:lr, CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
+                # vp, ret, v_l1 = sess.run(
+                #     [OLDNEGLOGPAC, neglogpac, ratio],
+                #     td_map                
+                # )
+                # print(vp.shape, ret.shape, v_l1.shape)
 
                 return sess.run(
-                    [pg_loss, loss_v, loss_inverse, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v],
+                    [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_forward],
                     td_map                
-                )[:-2]
+                )[:-3]
+            # if train_type == 'value':
+            #     advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
+            #     td_map = {train_model.is_training: True, train_model.X:obs, train_model.A:actions, ADV:advs, RETRUN:returns, 
+            #             LR:lr, CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values}
 
+            #     return sess.run(
+            #         [pg_loss, loss_v, entropy, approxkl, clipfrac, _grad_norm_a, train_v],
+            #         td_map                
+            #     )[:-1]
 
         def get_neglogpac(obs, actions):
             return sess.run(neglogpac, {train_model.X:obs, A:actions})
@@ -173,7 +199,8 @@ class Model(object):
                 net_params = sess.run(params_actor)
             elif params_type == 'value':
                 net_params = sess.run(params_value)
-
+            elif params_type == 'forward':
+                net_params = sess.run(params_forward)
             return np.asarray(net_params)
 
         def replace_params(loaded_params, params_type = 'all'):
@@ -183,6 +210,8 @@ class Model(object):
                 sess.run(restores_actor, feed_dict={i: d for i, d in zip(network_params_actor, loaded_params)})
             elif params_type == 'value':
                 sess.run(restores_value, feed_dict={i: d for i, d in zip(network_params_value, loaded_params)})
+            elif params_type == 'forward':
+                sess.run(restores_fm, feed_dict={i: d for i, d in zip(network_params_forward, loaded_params)})
 
         def write_summary(summary_name, value, step):
             summary = tf.Summary()
@@ -236,6 +265,9 @@ class Model(object):
         self.replace_params = replace_params
         self.get_current_params = get_current_params
 
+        self.state_action_pred = train_model.state_action_pred
+        self.state_feature = train_model.state_feature
+
         if need_summary:
             # self.summary_writer = tf.summary.FileWriter('../model/log/exp/puck/normal', sess.graph)   
             # log_path = '../model/log/exp/landing/mp_morl_meta' #+ str(comm_rank)
@@ -268,157 +300,304 @@ class Runner(object):
         self.lam = lam
         self.nsteps = nsteps
         self.dones = [False for _ in range(nenv)]
-        self.tasks = []
 
-    def init_task_pool(self, nsteps):
+        self.tasks_sas = []
         self.tasks = []
+        self.tasks_vlaue = []
+        self.min_value = 0
+        self.index = 0
+        self.task_length = 20
+        self.buffer_full = False
+
+    def init_task_pool(self, nsteps, model_old, render = False):
+        self.tasks = []
+        self.tasks_vlaue = []
+
+        tra_obs = []
+        tra_data = []
+
         full_obs = self.env.reset()       
         # full_obs = self.env.set_sim_data(sim_data, sim_goal)
 
         start_obs = full_obs['observation']
-
         task_data = self.env.get_sim_data()
         # sim_goal = full_obs['desired_goal']
 
+        tra_obs.append(full_obs)
+        tra_data.append(task_data)
+
         self.obs[:] = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-        
-                
         for t in range(nsteps):
-            actions, values, neglogpacs = self.model.step(self.obs, self.dones)
-            full_obs, rewards, self.dones, infos = self.env.step(actions[0])
-            self.obs[:] = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+            full_obs = self.env.reset()
+            # if len(self.tasks) > 0 and np.random.rand()>0.5:
+            #     task_index = np.random.randint(len(self.tasks))
+            #     task = self.tasks[task_index]     
+            #     full_obs = self.env.set_sim_data(task[0], task[1])
 
-            # check task
-            task_obs = np.concatenate((start_obs, full_obs['achieved_goal']), axis=0) 
-            task_value = self.model.value([task_obs])
-            print(task_value)
+            start_obs = full_obs['observation']
+            task_data = self.env.get_sim_data() 
+            goal_pre = full_obs['achieved_goal'] #np.zeros(len(full_obs['achieved_goal'])) #full_obs['achieved_goal']
+
+            tra_tasks = []
+            tra_values = []
+
+            for s in range(150):
+                actions, values, neglogpacs = self.model.step(self.obs, self.dones)
+                full_obs, rewards, self.dones, infos = self.env.step(actions[0])
+                self.obs[:] = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+
+                # check task
+                task_obs = np.concatenate((start_obs, full_obs['achieved_goal']), axis=0) 
+                task_value = self.model.value([task_obs])[0,0]
+                # task_value_old = model_old.value([task_obs])[0,0]
+                # task = [task_data, full_obs['achieved_goal']]
+                if render:
+                    self.env.render('human')
+                    print(task_value, values, full_obs['achieved_goal'])
+                # print(task_value, goal_pre, full_obs['achieved_goal'])
+
+                # save current state data
+                current_sim_data = self.env.get_sim_data()
+                tra_obs.append(full_obs)
+                tra_data.append(current_sim_data)
+
+                diff = abs(goal_pre - full_obs['achieved_goal'])
+                if np.any(diff > 0.01):
+                    for ob, data in zip(tra_obs, tra_data):
+                        task_obs = np.concatenate((ob['observation'], full_obs['achieved_goal']), axis=0) 
+                        task_value = self.model.value([task_obs])[0,0]     
+
+                        task = [data, full_obs['achieved_goal']]
+                        tra_tasks.append(task)
+                        tra_values.append(task_value)      
+
+                    task_obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+                    task_value = self.model.value([task_obs])[0,0]     
+                    task = [current_sim_data, full_obs['desired_goal']]
+                    tra_tasks.append(task)
+                    tra_values.append(task_value) 
+
+                    if render:
+                        print('add task')
+                # task_value = np.clip(task_value, 0.000001, 1)
+
+                goal_pre = full_obs['achieved_goal']
+
+                if self.dones or full_obs['achieved_goal'][-1] < 0.4:
+                    tra_obs = []
+                    tra_data = []     
+
+                    for task, task_value, i in zip(tra_tasks, tra_values, range(len(tra_tasks))):
+                        if i%3 == 0:
+                            self.env.reset()  
+                            full_obs = self.env.set_sim_data(task[0], task[1])
+                            task_obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+                            real_value = self.model.value([task_obs])[0,0] 
+                            real_value_old = model_old.value([task_obs])[0,0]
+                            # if render:
+                            #     print(real_value, real_value_old)
+                            self.env.render('human')
+                            # print(real_value)
+                            value_diff = abs(real_value - real_value_old)
+                            if real_value < 0:
+                                self.tasks.append(task)
+                                self.tasks_vlaue.append(real_value)    
+                    if render:
+                        print('task length', len(tra_tasks), len(self.tasks))
+                    break   
+
+            if len(self.tasks) > 300:
+                break
+
+        if len(self.tasks) > 0:
+            print(len(self.tasks), np.mean(self.tasks_vlaue), np.max(self.tasks_vlaue), np.min(self.tasks_vlaue))      
+            self.tasks_vlaue = -np.asarray(self.tasks_vlaue)
+            mean_v = self.tasks_vlaue.mean()
+            # final_task, final_v = [], []
+            # for task, v in zip(self.tasks, self.tasks_vlaue):
+            #     if v > mean_v:
+            #         final_task.append(task)
+            #         final_v.append(v)
+            # self.tasks = final_task.copy()
+            # self.tasks_vlaue = final_v.copy()
+            self.tasks_vlaue = self.tasks_vlaue - self.tasks_vlaue.min()
+            self.tasks_vlaue = self.tasks_vlaue/self.tasks_vlaue.sum()            
+            print(len(self.tasks), np.mean(self.tasks_vlaue), np.max(self.tasks_vlaue), np.min(self.tasks_vlaue))      
 
 
-    def run(self, nsteps, is_test = False, use_deterministic = False):
-
-        mb_obs, mb_obs_next, mb_rewards, mb_actions, mb_values, mb_values_next, mb_dones, mb_neglogpacs = [],[],[],[],[],[],[],[]
+    def run(self, nsteps, is_test = False, use_deterministic = False, render = False):
+        mb_obs, mb_obs_next, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[],[]
         mb_infos = []
         epinfos = []
 
+        # self.tasks = []
+        # self.tasks_vlaue = []
+        
+        # update task value
+        for i in range(len(self.tasks)):
+            if self.tasks_vlaue[i] < 0:
+                continue
+            s, a, s_ = self.tasks_sas[i]
+            next_statef_pred = self.model.state_action_pred([s], [a])
+            next_statef = self.model.state_feature([s_])
+            diff_f = (next_statef_pred - next_statef)
+            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
+            rewards_norm = diff_f_norm
+            self.tasks_vlaue[i] = rewards_norm   
+
+        print('average task value', np.asarray(self.tasks_vlaue).mean())
+
+        full_obs = self.env.reset()  
+        if len(self.tasks) > 0:
+            task_prob = np.asarray(self.tasks_vlaue)
+            task_prob = task_prob - task_prob.min()
+            task_prob = task_prob/task_prob.sum() 
+
+            task_index = np.random.choice(len(self.tasks), 1, p=task_prob)[0]
+            task = self.tasks[task_index]     
+            full_obs = self.env.set_sim_data(task[0], task[1])
+            # joblib.dump(self.tasks, '../model/checkpoints/tasks')
+            # joblib.dump(self.tasks_sas, '../model/checkpoints/tasks_sas')
+            # joblib.dump(self.tasks_vlaue, '../model/checkpoints/tasks_value')
+            min_index = np.argmin(np.asarray(self.tasks_vlaue))
+
+        obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+        actions, values, neglogpacs = self.model.step([obs], self.dones)
+
+        sas = [obs, actions, obs]
+        task_obs = obs
+        task_value = -1 #mb_values[-1][-1]  
+        current_sim_data = self.env.get_sim_data()
+        task = [current_sim_data, full_obs['desired_goal']]        
+        for i in range(self.task_length):
+            self.tasks.append(task)
+            self.tasks_vlaue.append(task_value) 
+            self.tasks_sas.append(sas)            
+
+        min_index = np.argmin(np.asarray(self.tasks_vlaue))
+
         t_s = time.time()
         ret = False
-        # self.obs[:] = self.env.reset()
+        count_down = 0
+        
         for t in range(nsteps):
+            # if t%500 == 0:
+                # print(t)
+            current_sim_data = self.env.get_sim_data()
+            
             if use_deterministic:
-                actions, values, neglogpacs = self.model.step_max(self.obs, self.dones)
+                actions, values, neglogpacs = self.model.step_max([obs], self.dones)
             else:
-                actions, values, neglogpacs = self.model.step(self.obs, self.dones)
+                actions, values, neglogpacs = self.model.step([obs], self.dones)
 
-            # print(values)
-            mb_obs.append(self.obs.copy())
-            mb_actions.append(actions)
-            mb_values.append(values)
-            mb_neglogpacs.append(neglogpacs)
+            mb_obs.append(obs.copy())
+            mb_actions.append(actions[0])
+            mb_values.append(values[0])
+            mb_neglogpacs.append(neglogpacs[0])
             mb_dones.append(self.dones)
 
-            next_statef_pred = self.model.state_action_pred(self.obs, actions)
-            obs_pre = self.obs.copy()
+            next_statef_pred = self.model.state_action_pred([obs], actions)
 
-            actions_send = actions.copy()
-            # actions_send[:, -1] *= 0.1
-            self.obs[:], rewards, self.dones, infos = self.env.step(actions_send)
-            rewards = rewards[:,:-1]
-            values_next = np.zeros(rewards.shape)            
-            mb_obs_next.append(self.obs.copy())
+            full_obs, r, self.dones, infos = self.env.step(actions[0])
+            obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+            mb_obs_next.append(obs.copy())
 
-            # next_statef_pred = self.model.state_action_pred(obs_pre, rewards[:,:-1])
+            rewards = np.array([r, 0.0])
 
-            ##############################################################
-            # next_statef = self.model.state_feature(self.obs)
-            # next_statef = np.concatenate((next_statef, rewards[:, 0:-1]), axis=1)
-            # action_pred = self.model.next_action_pred(obs_pre, self.obs)
-            next_statef = self.model.next_state_feature(self.obs, rewards[:,:-1])
-            diff_f = (next_statef_pred - next_statef)
-            # diff_a = action_pred - actions
-            # diff_f = next_statef_pred - rewards[:, :-1]
+            object_related_index = [3,4,5,11,12,13,14,15,16,17,18,19]
+            next_statef = self.model.state_feature([obs])
+            # next_statef_pred = self.model.state_action_pred([obs], actions)
 
-            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f, axis=1))
-            # diff_a_norm = np.sqrt(np.sum(diff_a*diff_a, axis=1))
+            diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
+            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
             rewards_norm = diff_f_norm
+            rewards[-1] = rewards_norm
 
-            # print(values_next)
+            sas = [mb_obs[-1], mb_actions[-1], mb_obs_next[-1]]
+            task_obs = mb_obs[-1]
+            task_value = rewards_norm #mb_values[-1][-1]  
+            task = [current_sim_data, full_obs['desired_goal']]
 
-            # value_pred_next = self.model.value(self.obs)
-            # rewards_diff = value_pred_next[:, :-1] - rews_pred #mb_obs_next[:,0:-1]
-            # rewards_norm = np.sqrt(np.sum(rewards_diff*rewards_diff, axis=1))
-
-            rewards[:,-1] = rewards_norm  
-            # print(rewards_norm[10])
+            if rewards_norm > self.tasks_vlaue[min_index]:
+                print('replace', min_index, rewards_norm, self.tasks_vlaue[min_index])
+                self.tasks[min_index] = task
+                self.tasks_vlaue[min_index] = task_value
+                self.tasks_sas[min_index] = sas
+                # count_down = 5
 
             # ##########################################################
             ## for roboschool
+            if render:
+                self.env.render('human')
+                # print(rewards)
+
             v_preds = []
-            for i in range(len(self.dones)):
-                if self.dones[i]:
-                    if v_preds == []:
-                        v_preds = self.model.value(self.obs)
-                    # if rewards[i][0] > 0:  
-                    #     rewards[i] += self.gamma*v_preds[i] 
-                    # else:
-                    #     rewards[i][2:] += self.gamma*v_preds[i][2:]
-                    values_next[i] = self.gamma*v_preds[i] 
-                    values_next[:,-1] = 0
-            mb_values_next.append(values_next.copy())
+            if self.dones or full_obs['achieved_goal'][-1] < 0.42:
+                v_preds = self.model.value([obs])[0]
+                rewards[0] += self.gamma*v_preds[0]
+                if self.dones:
+                    rewards[-1] += self.gamma*v_preds[-1]
 
-            for info in infos:
-                maybeepinfo = info.get('episode')
-                if maybeepinfo: epinfos.append(maybeepinfo)
+                full_obs = self.env.reset()   
+                if len(self.tasks) > 0:
+                    min_index = np.argmin(np.asarray(self.tasks_vlaue))
+                if np.random.rand() > 0.5 and len(self.tasks) > 10:
+                    task_prob = np.asarray(self.tasks_vlaue)
+                    task_prob = task_prob - task_prob.min()
+                    task_prob = task_prob/task_prob.sum()        
+                    # print(task_prob)             
+                    task_index = np.random.choice(len(self.tasks), 1, p=task_prob)[0]
+                    min_index = task_index
+                    print(task_index, self.tasks_vlaue[task_index], len(self.tasks))
+                    task = self.tasks[task_index]    
+                    full_obs = self.env.set_sim_data(task[0], task[1])
+                else:
+                    print('random init')
+                obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+
+            # print(infos, full_obs['desired_goal'], full_obs['achieved_goal'])
             mb_rewards.append(rewards)
-            mb_infos.append(infos)        
-
-            if is_test:
-                for i in range(len(self.dones)):
-                    if self.dones[i]:
-                        ret = True            
-                if ret:
-                    print(rewards)
-                    print('score', infos[-1]['episode']['r'])
-                    break
 
         # print(1, time.time() - t_s, len(mb_rewards))
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_obs_next = np.asarray(mb_obs_next, dtype=self.obs.dtype)
+
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
         mb_actions = np.asarray(mb_actions)
         mb_values = np.asarray(mb_values, dtype=np.float32)
-        mb_values_next = np.asarray(mb_values_next, dtype=np.float32)
 
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
-        last_values = self.model.value(self.obs, self.dones)
+        last_values = self.model.value([obs], self.dones)[0]
 
         #discount/bootstrap off value fn
         mb_returns = np.zeros_like(mb_rewards)
         mb_advs = np.zeros_like(mb_rewards)
-        mb_advs_pf = np.zeros_like(mb_rewards)
         lastgaelam = 0
 
+
         for t in reversed(range(len(mb_values))):
-            nextnonterminal = np.zeros(last_values.shape)
             if t == len(mb_values) - 1:
-                for l in range(len(nextnonterminal[0])):
-                    nextnonterminal[:,l] = 1.0 - self.dones
+                nextnonterminal = 1.0 - self.dones
                 nextvalues = last_values
             else:
-                for l in range(len(nextnonterminal[0])):
-                    nextnonterminal[:,l] = 1.0 - mb_dones[t+1]    
+                nextnonterminal = 1.0 - mb_dones[t+1]     
                 nextvalues = mb_values[t+1]
 
-            delta = mb_rewards[t] + mb_values_next[t] + self.gamma * nextvalues * nextnonterminal - mb_values[t]
+            delta = mb_rewards[t] + self.gamma * nextvalues * nextnonterminal - mb_values[t]
 
             mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
 
         mb_returns = mb_advs + mb_values
 
+        # print(mb_values.shape, mb_rewards.shape, mb_returns.shape)
+        # for i in range(len(mb_values)):
+        #     print(mb_rewards[i], mb_returns[i], mb_dones[i], mb_advs[i])
 
-        return (*map(sf01, (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
-            epinfos, ret)
+        return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs, epinfos, ret)
+        # return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
+        #     epinfos, ret)
 
 def sf01(arr):
     """
@@ -446,22 +625,8 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
                             rewards, returns, values, advs_ori, epinfobuf, model, logger):
     # lossvals = np.mean(mblossvals, axis=0)
     if update % log_interval == 0 or update == 1:
-        # # ev = explained_variance(values, returns)
-        # logger.logkv("serial_timesteps", update*nsteps)
-        # logger.logkv("nupdates", update)
-        # logger.logkv("total_timesteps", update*nbatch)
-        # # logger.logkv("explained_variance", float(ev))
-        # # logger.logkv("return_mean", np.mean(returns))
-        # logger.logkv('rew_mean', np.mean(rewards))
-        # logger.logkv('eprewmean', safemean([epinfo['r'][-1] for epinfo in epinfobuf]))
-        # logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
-        # for (lossval, lossname) in zip(lossvals, model.loss_names):
-        #     logger.logkv(lossname, lossval)
-        # logger.dumpkvs()
-        
-        # step_label = update*nbatch
         step_label = update
-        for i in range(REWARD_NUM):
+        for i in range(REWARD_NUM+1):
             model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
             model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
             # model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)\
@@ -480,11 +645,10 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
 
 
 def nimibatch_update(   nbatch, noptepochs, nbatch_train,
-                        obs, obs_next, returns, actions, values, advs, rewards, neglogpacs,
+                        obs, obs_next, returns, actions, values, advs, neglogpacs,
                         lrnow, cliprangenow, nsteps, model, update_type = 'all', allow_early_stop = True):
     mblossvals = []
     nbatch_train = int(nbatch_train)
-    rewards = rewards[:, :-1]
 
     # inds = np.arange(nbatch)
     inds = np.arange(len(obs))
@@ -496,7 +660,7 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
             params_all_base = model.get_current_params(params_type='all')
             end = start + nbatch_train
             mbinds = inds[start:end]
-            slices = (arr[mbinds] for arr in (obs, obs_next, returns, actions, values, advs, rewards, neglogpacs))
+            slices = (arr[mbinds] for arr in (obs, obs_next, returns, actions, values, advs, neglogpacs))
 
             losses = model.train(lrnow, cliprangenow, *slices, train_type=update_type)
             mblossvals.append(losses)

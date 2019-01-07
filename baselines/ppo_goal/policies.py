@@ -302,8 +302,7 @@ class MlpPolicy_Goal(object):
         is_training = tf.placeholder_with_default(False, shape=(), name='training')
 
         X = tf.placeholder(tf.float32, ob_shape, name='Ob') #obs
-        X_NEXT = tf.placeholder(tf.float32, ob_shape, name='Ob_next') #obs
-        REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
+        # REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
 
         A = tf.placeholder(tf.float32, ac_shape, name='action') #obs   train_model.pdtype.sample_placeholder([None])
         
@@ -340,27 +339,116 @@ class MlpPolicy_Goal(object):
         def value(ob, *_args, **_kwargs):
             return sess.run(vf, {X:ob})
 
-        def get_state_action_prediction(ob, action, *_args, **_kwargs):
-            # return sess.run(x_next_feature_pred, {X:ob, REWARD:reward})
-            return sess.run(x_next_feature_pred, {X:ob, A:action})
+        def step_max(ob, *_args, **_kwargs):
+            a, v, neglogp = sess.run([a1, vf, neglogp0], {X:ob})
+            # a = np.clip(a, -1, 1)
+            return a, v, neglogp
 
-        def get_state_feature(ob, *_args, **_kwargs):
-            return sess.run(x_feature, {X:ob})
+        self.X = X
+        self.is_training = is_training
+        self.A = A
+        self.pi = pi
+        self.std = self.pd.std
+        self.vf = vf
+        self.step = step
+        self.step_max = step_max
+        self.value = value
+        self.mean = a1
 
-        def get_next_state_feature(ob, reward, *_args, **_kwargs):
-            # return sess.run(x_next_feature_reward_fc, {X_NEXT:ob, REWARD:reward})
-            return sess.run(x_next_feature, {X_NEXT:ob, REWARD:reward})
 
-        def get_inverse_dynamic_pred(ob, ob_next, *_args, **_kwargs):
-            # return sess.run(x_next_feature_reward_fc, {X_NEXT:ob, REWARD:reward})
-            return sess.run(inverse_dynamic_pred, {X:ob, X_NEXT:ob_next})
+
+class MlpPolicy_Goal(object):
+    def create_obs_feature_net(self, obs, is_training, units=[128, 64], reuse=False):
+        with tf.variable_scope('obs_feature', reuse=reuse):    
+            for i in range(len(units)):
+                if i == 0:
+                    hd = self.dense_layer_bn(obs, units[i], tf.nn.relu, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
+                else:
+                    hd = self.dense_layer_bn(hd, units[i], tf.nn.relu, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
+
+            # h2_obsf = self.dense_layer_bn(h1_obsf, 64, 'obs_f_h2', tf.nn.relu, is_training) #activ(fc(h1_val, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
+        return hd
+
+    def dense_layer(self, input_s, output_size, activation):
+        out = tf.layers.dense(input_s, output_size, activation)
+        return out
+
+    def dense_layer_bn(self, input_s, output_size, activation, training):
+        out = tf.layers.dense(input_s, output_size)
+        # out = tf.layers.batch_normalization(out, name=name+'_bn', training=training)
+        out = activation(out)
+        return out
+
+    def __init__(self, sess, ob_space, ac_space, goal_space, REWARD_NUM, reuse=False, model_name="model"):
+        # with tf.device('/device:GPU:0'):
+        ob_shape = [None, ob_space.shape[0]+goal_space.shape[0]]
+        ac_shape = (None,) + ac_space.shape
+
+        print('ob_space.shape', ob_shape)
+
+        actdim = ac_space.shape[0]
+        is_training = tf.placeholder_with_default(False, shape=(), name='training')
+
+        X = tf.placeholder(tf.float32, ob_shape, name='Ob') #obs
+        X_NEXT = tf.placeholder(tf.float32, ob_shape, name='Ob_next') #obs
+
+        # REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
+
+        A = tf.placeholder(tf.float32, ac_shape, name='action') #obs   train_model.pdtype.sample_placeholder([None])
+
+        with tf.variable_scope(model_name, reuse=reuse):
+            # x_feature = self.create_obs_feature_net(X, is_training, reuse=False)
+            x_next_feature = self.create_obs_feature_net(X_NEXT, is_training, reuse=False)
+
+            with tf.variable_scope('actor', reuse=reuse):
+                h2_act = self.create_obs_feature_net(X, is_training, reuse=False)
+                pi = self.dense_layer(h2_act, actdim, None) #fc(h2_act, 'pi', actdim, init_scale=0.01)
+                logstd = tf.get_variable(name="logstd", shape=[1, actdim],
+                    initializer=tf.zeros_initializer())    
+
+            with tf.variable_scope('value', reuse=reuse): 
+                h2_val = self.create_obs_feature_net(X, is_training, reuse=False)
+                vf_1 = self.dense_layer(h2_val, 1, None) #fc(h2_val, 'vf', REWARD_NUM-1)
+                vf_c = self.dense_layer(h2_val, 1, None) #fc(h2_val, 'vf', REWARD_NUM-1)
+
+                vf = tf.concat([vf_1, vf_c], axis=1)      
+
+            with tf.variable_scope('forward_dynamic', reuse=reuse):   
+                # x_next_feature = X_NEXT 
+
+                state_action = tf.concat([X, A], axis=1)     
+                h2_fd = self.create_obs_feature_net(state_action, is_training, reuse=False)
+                # x_next_feature_pred = self.dense_layer(h2_fd, 32, 'next_state_f', None) #fc(h2_fd, 'next_state_f', 32)
+                x_next_feature_pred = fc(h2_fd, 'next_state_f', 64)
+
+        pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
+
+        self.pdtype = make_pdtype(ac_space)
+        self.pd = self.pdtype.pdfromflat(pdparam)
+
+        a0 = self.pd.sample()
+        a1 = self.pd.mode()
+        neglogp0 = self.pd.neglogp(a0)
+
+        def step(ob, *_args, **_kwargs):
+            a, v, neglogp = sess.run([a0, vf, neglogp0], {X:ob})
+            a = np.clip(a, -2, 2)
+            return a, v, neglogp
+
+        def value(ob, *_args, **_kwargs):
+            return sess.run(vf, {X:ob})
 
         def step_max(ob, *_args, **_kwargs):
             a, v, neglogp = sess.run([a1, vf, neglogp0], {X:ob})
             # a = np.clip(a, -1, 1)
             return a, v, neglogp
 
-        self.REWARD = REWARD
+        def get_state_action_prediction(ob, action, *_args, **_kwargs):
+            return sess.run(x_next_feature_pred, {X:ob, A:action})
+
+        def get_state_feature(ob, *_args, **_kwargs):
+            return sess.run(x_next_feature, {X_NEXT:ob})
+
         self.X = X
         self.X_NEXT = X_NEXT
         self.is_training = is_training
@@ -373,3 +461,8 @@ class MlpPolicy_Goal(object):
         self.value = value
         self.mean = a1
 
+        # self.x_feature = x_feature
+        self.x_next_feature = x_next_feature
+        self.x_next_feature_pred = x_next_feature_pred   
+        self.state_action_pred = get_state_action_prediction
+        self.state_feature = get_state_feature

@@ -65,48 +65,57 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     nupdates = total_timesteps//nbatch
 
     for update in range(start_update+1, nupdates+1):
-        runner.init_task_pool(100)
-        # obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, states, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+        # runner.init_task_pool(1000)
+        obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos, ret = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
         # advs = advs_ori[:, -1] #+ advs_ori[:, 1]*2
-        
+        advs = np.asarray(advs_ori)
 
-        # advs = np.asarray(advs)
-        # print('advs mean', advs.mean(), advs.max(), advs.min())
+        obs_gather = MPI.COMM_WORLD.gather(obs)
+        obs_next_gather = MPI.COMM_WORLD.gather(obs_next)
+
+        returns_gather = MPI.COMM_WORLD.gather(returns)
+        actions_gather = MPI.COMM_WORLD.gather(actions)
+        advs_gather = MPI.COMM_WORLD.gather(advs)
+        values_gather = MPI.COMM_WORLD.gather(values)
+        neglogpacs_gather = MPI.COMM_WORLD.gather(neglogpacs)
+
+        if comm_rank == 0:
+            all_obs, all_obs_next, all_a, all_ret, all_adv, all_value, all_neglogpacs = [], [], [], [], [], [], []
+            for obs, obs_next, actions, returns, advs, values, neglogpacs in zip(obs_gather, obs_next_gather, actions_gather, returns_gather, advs_gather, values_gather, neglogpacs_gather):
+                all_obs, all_obs_next, all_a, all_ret, all_adv, all_value, all_neglogpacs = stack_values([all_obs, all_obs_next, all_a, all_ret, all_adv, all_value, all_neglogpacs], [obs, obs_next, actions, returns, advs, values, neglogpacs])
+
+            print(all_obs.shape, all_ret.shape)
+
+            print('advs mean', advs.mean(), advs.max(), advs.min())
+            print('ret mean', returns.mean(), returns.max(), returns.min())
+            print(values.mean(), rewards.mean())
+
+            # mean_returns = np.mean(returns, axis = 0)
+            # mean_values = np.mean(values, axis = 0)
+            # mean_rewards = np.mean(advs_ori, axis = 0)
+
+            # print(obs.shape, advs.shape, returns.shape)
+            # print(update, comm_rank, 'ret    ', np.array_str(mean_returns, precision=3, suppress_small=True))
+            # print(update, comm_rank, 'val    ', np.array_str(mean_values, precision=3, suppress_small=True))
+            # print(update, comm_rank, 'adv    ', np.array_str(mean_rewards, precision=3, suppress_small=True))
+            # print(values_ret[:,-1].mean())
+
+            lr_p, cr_p = 0.0003, 0.2
+
+            mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+                                            obs, returns, actions, values, advs, neglogpacs,
+                                            lr_p, cr_p, nsteps, model, update_type = 'all')   
+            print(mblossvals[0], mblossvals[1], mblossvals[2])
+            # display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
+            #                     rewards, returns, values, advs_ori, epinfos, model, logger)    
 
 
-        # mean_returns = np.mean(returns, axis = 0)
-        # mean_values = np.mean(values, axis = 0)
-        # mean_rewards = np.mean(advs_ori, axis = 0)
+            print('\n') 
 
-        # print(obs.shape, advs.shape)
-        # print(update, comm_rank, 'ret    ', np.array_str(mean_returns, precision=3, suppress_small=True))
-        # print(update, comm_rank, 'val    ', np.array_str(mean_values, precision=3, suppress_small=True))
-        # print(update, comm_rank, 'adv    ', np.array_str(mean_rewards, precision=3, suppress_small=True))
-        # # print(values_ret[:,-1].mean())
+            if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
+                save_model(model, update)
+                save_model(model, 0)
 
-        # advs_g = np.concatenate((advs_ori, np.asarray([advs]).T), axis=1)
-        # cm = np.corrcoef(advs_g.transpose())
-        # print(cm)
-
-        # lr_p, cr_p = 0.0003, 0.2
-        # # max_val = np.max(values_next, axis=0)
-        # # min_val = np.min(values_next, axis=0)
-        # # runner.ref_point_max = np.maximum(max_val[:-1], runner.ref_point_max)
-        # # runner.ref_point_min = np.minimum(min_val[:-1], runner.ref_point_min)
-
-        # mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
-        #                                 obs, obs_next, returns, actions, values, advs, rewards, neglogpacs,
-        #                                 lr_p, cr_p, states, nsteps, model, update_type = 'all')   
-        # display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
-        #                     rewards, returns, values, advs_ori, epinfos, model, logger)    
-
-
-        # print('\n') 
-
-        # if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
-        #     save_model(model, update)
-        #     save_model(model, 0)
-
-        # first = False
+            first = False
     env.close()
 

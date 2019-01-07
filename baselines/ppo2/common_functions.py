@@ -382,7 +382,8 @@ class Runner(object):
                     # else:
                     #     rewards[i][2:] += self.gamma*v_preds[i][2:]
                     values_next[i] = self.gamma*v_preds[i] 
-                    values_next[:,-1] = 0
+                    if rewards[i][0] < 0:  
+                        values_next[i][-1] = 0
             mb_values_next.append(values_next.copy())
 
             for info in infos:
