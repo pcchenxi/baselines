@@ -358,13 +358,13 @@ class MlpPolicy_Goal(object):
 
 
 class MlpPolicy_Goal(object):
-    def create_obs_feature_net(self, obs, is_training, units=[128, 64], reuse=False):
+    def create_obs_feature_net(self, obs, is_training, units=[128, 64], reuse=False, act = tf.nn.relu):
         with tf.variable_scope('obs_feature', reuse=reuse):    
             for i in range(len(units)):
                 if i == 0:
-                    hd = self.dense_layer_bn(obs, units[i], tf.nn.relu, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
+                    hd = self.dense_layer_bn(obs, units[i], act, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
                 else:
-                    hd = self.dense_layer_bn(hd, units[i], tf.nn.relu, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
+                    hd = self.dense_layer_bn(hd, units[i], act, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
 
             # h2_obsf = self.dense_layer_bn(h1_obsf, 64, 'obs_f_h2', tf.nn.relu, is_training) #activ(fc(h1_val, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
         return hd
@@ -398,7 +398,7 @@ class MlpPolicy_Goal(object):
 
         with tf.variable_scope(model_name, reuse=reuse):
             # x_feature = self.create_obs_feature_net(X, is_training, reuse=False)
-            x_next_feature = self.create_obs_feature_net(X_NEXT, is_training, reuse=False)
+            x_next_feature = self.create_obs_feature_net(X_NEXT, is_training, units=[256,128,128,64], reuse=False, act=tf.nn.tanh)
 
             with tf.variable_scope('actor', reuse=reuse):
                 h2_act = self.create_obs_feature_net(X, is_training, reuse=False)
@@ -416,8 +416,8 @@ class MlpPolicy_Goal(object):
             with tf.variable_scope('forward_dynamic', reuse=reuse):   
                 # x_next_feature = X_NEXT 
 
-                state_action = tf.concat([X, A], axis=1)     
-                h2_fd = self.create_obs_feature_net(state_action, is_training, reuse=False)
+                # state_action = tf.concat([X, A], axis=1)     
+                h2_fd = self.create_obs_feature_net(X_NEXT, is_training, units=[256, 128, 128, 64], reuse=False)
                 # x_next_feature_pred = self.dense_layer(h2_fd, 32, 'next_state_f', None) #fc(h2_fd, 'next_state_f', 32)
                 x_next_feature_pred = fc(h2_fd, 'next_state_f', 64)
 
@@ -444,7 +444,7 @@ class MlpPolicy_Goal(object):
             return a, v, neglogp
 
         def get_state_action_prediction(ob, action, *_args, **_kwargs):
-            return sess.run(x_next_feature_pred, {X:ob, A:action})
+            return sess.run(x_next_feature_pred, {X_NEXT:ob, A:action})
 
         def get_state_feature(ob, *_args, **_kwargs):
             return sess.run(x_next_feature, {X_NEXT:ob})
