@@ -8,6 +8,7 @@ from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
 comm_rank = comm.Get_rank()
+nprocs = comm.Get_size()
 
 REWARD_NUM = 1
 
@@ -288,7 +289,7 @@ class Model(object):
 
 class Runner(object):
 
-    def __init__(self, *, env, model, nsteps, gamma, lam):
+    def __init__(self, *, env, model, nsteps, gamma, lam, buffer_length = 100):
         self.env = env
         self.model = model
         nenv = 1 #env.num_envs
@@ -303,24 +304,31 @@ class Runner(object):
 
         self.tasks_sas = []
         self.tasks = []
-        self.tasks_vlaue = []
+        self.tasks_value = []
         self.min_value = 0
         self.index = 0
-        self.task_length = 1000
+        self.task_length = buffer_length
+        self.gamma_list = np.random.rand(nprocs)
 
+        self.init_task_buffer()
+
+    def init_task_buffer(self):
         full_obs = self.env.reset()  
         obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+        actions, values, neglogpacs = self.model.step([obs], self.dones)
 
+        sas = [obs, actions, obs]
         task_obs = obs
         current_sim_data = self.env.get_sim_data()
         task = [current_sim_data, full_obs['desired_goal']]        
         for i in range(self.task_length):
             self.tasks.append(task)
-            self.tasks_vlaue.append(0) 
+            self.tasks_value.append(0)
+            self.tasks_sas.append(sas) 
 
     def init_task_pool(self, nsteps, model_old, render = False):
         self.tasks = []
-        self.tasks_vlaue = []
+        self.tasks_value = []
 
         tra_obs = []
         tra_data = []
@@ -410,7 +418,7 @@ class Runner(object):
                             value_diff = abs(real_value - real_value_old)
                             if real_value < 0:
                                 self.tasks.append(task)
-                                self.tasks_vlaue.append(real_value)    
+                                self.tasks_value.append(real_value)    
                     if render:
                         print('task length', len(tra_tasks), len(self.tasks))
                     break   
@@ -419,35 +427,39 @@ class Runner(object):
                 break
 
         if len(self.tasks) > 0:
-            print(len(self.tasks), np.mean(self.tasks_vlaue), np.max(self.tasks_vlaue), np.min(self.tasks_vlaue))      
-            self.tasks_vlaue = -np.asarray(self.tasks_vlaue)
-            mean_v = self.tasks_vlaue.mean()
+            print(len(self.tasks), np.mean(self.tasks_value), np.max(self.tasks_value), np.min(self.tasks_value))      
+            self.tasks_value = -np.asarray(self.tasks_value)
+            mean_v = self.tasks_value.mean()
             # final_task, final_v = [], []
-            # for task, v in zip(self.tasks, self.tasks_vlaue):
+            # for task, v in zip(self.tasks, self.tasks_value):
             #     if v > mean_v:
             #         final_task.append(task)
             #         final_v.append(v)
             # self.tasks = final_task.copy()
-            # self.tasks_vlaue = final_v.copy()
-            self.tasks_vlaue = self.tasks_vlaue - self.tasks_vlaue.min()
-            self.tasks_vlaue = self.tasks_vlaue/self.tasks_vlaue.sum()            
-            print(len(self.tasks), np.mean(self.tasks_vlaue), np.max(self.tasks_vlaue), np.min(self.tasks_vlaue))      
+            # self.tasks_value = final_v.copy()
+            self.tasks_value = self.tasks_value - self.tasks_value.min()
+            self.tasks_value = self.tasks_value/self.tasks_value.sum()            
+            print(len(self.tasks), np.mean(self.tasks_value), np.max(self.tasks_value), np.min(self.tasks_value))      
 
-    def update_task_value(self, task_list):
+    def update_task_value(self, task_list, value_list=[]):
         task_values = []
         for i in range(len(task_list)):
-            task = task_list[i]
-            self.env.reset()  
-            full_obs = self.env.set_sim_data(task[0], task[1])
-            task_obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+            if value_list != [] and value_list[i] == 0:
+                diff_f_norm = 0
+            else:
+                task = task_list[i]
+                self.env.reset()  
+                full_obs = self.env.set_sim_data(task[0], task[1])
+                task_obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+                
+                next_statef = self.model.state_feature([task_obs])
+                next_statef_pred = self.model.state_action_pred([task_obs])
+                diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
+                diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
 
-            next_statef = self.model.state_feature([task_obs])
-            next_statef_pred = self.model.state_action_pred([task_obs])
-            diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
-            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
+                v_preds = self.model.value([task_obs])[0][-1]
+                diff_f_norm += v_preds*self.gamma_list[comm_rank]
 
-            v_preds = self.model.value([task_obs])[0][-1]
-            diff_f_norm += v_preds*0.98
             task_values.append(diff_f_norm)
         return task_values
 
@@ -467,15 +479,18 @@ class Runner(object):
         epinfos = []
 
         # self.tasks = []
-        # self.tasks_vlaue = []
+        # self.tasks_value = []
         
         tra_tasks = []
+        tra_tasks_sas = []
 
         # update task value
-        self.tasks_value = self.update_task_value(self.tasks)
-        # print('average task value', np.asarray(self.tasks_vlaue).mean())
+        print('average task value before', np.asarray(self.tasks_value).mean())
+        self.tasks_value = self.update_task_value(self.tasks, value_list=self.tasks_value)
+        print('average task value after', np.asarray(self.tasks_value).mean())
         full_obs = self.env.reset()  
         obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+        min_index = np.argmin(np.asarray(self.tasks_value))
 
         step_count = 0
         for t in range(nsteps):
@@ -502,7 +517,9 @@ class Runner(object):
             rewards[-1] = self.compute_intrinsic_reward(obs)
 
             task = [current_sim_data, full_obs['desired_goal']]
+            sas = [mb_obs[-1], mb_actions[-1], mb_obs_next[-1]]
             tra_tasks.append(task) 
+            tra_tasks_sas.append(sas)
             # ##########################################################
             ## for roboschool
             if render:
@@ -513,15 +530,25 @@ class Runner(object):
                 mb_dones[-1] = True
 
                 tra_tasks_value = self.update_task_value(tra_tasks)
+                v_before = self.tasks_value[min_index]
+
+                updated = False
                 for i in range(len(tra_tasks)):
                     task = tra_tasks[i]
                     value = tra_tasks_value[i]
+                    sas = tra_tasks_sas[i]
 
-                    min_index = np.argmin(np.asarray(self.tasks_vlaue))
+                    # min_index = np.argmin(np.asarray(self.tasks_value))
                     if value > self.tasks_value[min_index]:
+                        # print(value, self.tasks_value[min_index], value > self.tasks_value[min_index])
                         self.tasks[min_index] = task
-                        self.tasks_vlaue[min_index] = value
-
+                        self.tasks_value[min_index] = value
+                        self.tasks_sas[min_index] = sas
+                        updated = True
+                if updated:
+                    print('    updated', min_index, v_before, self.tasks_value[min_index])
+                else:
+                    print('    maxvalu', np.asarray(tra_tasks_value).max())
                 step_count = 0
                 v_preds = self.model.value([obs])[0]
                 rewards[0] += self.gamma*v_preds[0]
@@ -529,26 +556,28 @@ class Runner(object):
                     rewards[-1] += self.gamma*v_preds[-1]
 
                 full_obs = self.env.reset()   
-                task_prob = np.asarray(self.tasks_vlaue)
+                task_prob = np.asarray(self.tasks_value)
                 max_prob = task_prob.max()
-                mean_prob = task_prob.sum()/np.count_nonzero(self.tasks_vlaue)
-                task_prob = np.clip(task_prob, mean_prob, 100000)
+                mean_prob = task_prob.sum()/np.count_nonzero(self.tasks_value)
+                # task_prob = np.clip(task_prob, mean_prob, 100000)
                 task_prob = task_prob - task_prob.min()
                 task_prob = task_prob/task_prob.sum()        
                 # print(task_prob)         
                 if np.random.rand() > 0:
                     task_index = np.random.choice(len(self.tasks), 1, p=task_prob)[0]
+                    # task_index = np.random.choice(len(self.tasks), 1)[0]
                 else:
-                    task_index = np.argmax(self.tasks_vlaue)
+                    task_index = np.argmax(self.tasks_value)
 
-                # if self.tasks_vlaue[task_index] != -1 and np.count_nonzero(self.tasks_vlaue) > 50:
-                if np.random.rand() > 0.5 and np.count_nonzero(self.tasks_vlaue) > 0:
+                # if self.tasks_value[task_index] != -1 and np.count_nonzero(self.tasks_value) > 50:
+                if np.random.rand() > 0.5 and np.count_nonzero(self.tasks_value) > 3:
                     min_index = task_index
-                    print(comm_rank, task_index, self.tasks_vlaue[task_index], max_prob, len(self.tasks))
+                    print('---', comm_rank, task_index, self.tasks_value[task_index], max_prob, len(self.tasks))
                     task = self.tasks[task_index]    
                     full_obs = self.env.set_sim_data(task[0], task[1])
                 else:
-                    print('random init')
+                    min_index = np.argmin(np.asarray(self.tasks_value))
+                    print('---random init')
                 obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
                 tra_tasks = []
 

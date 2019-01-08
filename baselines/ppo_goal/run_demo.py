@@ -177,10 +177,19 @@ def run_test():
 
     # print(env.get_sim_data())
 
-    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.99)
+    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.99, buffer_length = 10)
+    runner.gamma_list = [0.5]
+    nbatch_train = 128
+    nbatch = 1024
+    noptepochs = 5
+    lr_p, cr_p = 0.0003, 0.2
+
     # runner.init_task_pool(15, model_old, render=True)
-    obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(int(30000), is_test=False, render=True) #pylint: disable=E0632
-    
+    for i in range(10000):
+        obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(int(nbatch), is_test=False, render=True) #pylint: disable=E0632
+        mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+                                                obs, obs_next, returns, actions, values, advs_ori[:,-1], neglogpacs,
+                                                lr_p, cr_p, nbatch, model, update_type = 'all')   
     # tasks = joblib.load('/home/xi/workspace/model/checkpoints/tasks')
     # tasks_vlaue = joblib.load('/home/xi/workspace/model/checkpoints/tasks_value')
 
