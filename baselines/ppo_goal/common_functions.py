@@ -295,8 +295,8 @@ class Runner(object):
         self.nenv = nenv
         self.obs = np.zeros([1, 28], dtype=model.train_model.X.dtype.name)
         # self.obs[:] = env.reset()
-        self.gamma = np.full(REWARD_NUM, gamma)
-        self.gamma[-1] = 0.98
+        self.gamma = gamma #np.full(REWARD_NUM, gamma)
+        # self.gamma[-1] = 0.98
         self.lam = lam
         self.nsteps = nsteps
         self.dones = [False for _ in range(nenv)]
@@ -306,7 +306,17 @@ class Runner(object):
         self.tasks_vlaue = []
         self.min_value = 0
         self.index = 0
-        self.task_length = 5000
+        self.task_length = 1000
+
+        full_obs = self.env.reset()  
+        obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+
+        task_obs = obs
+        current_sim_data = self.env.get_sim_data()
+        task = [current_sim_data, full_obs['desired_goal']]        
+        for i in range(self.task_length):
+            self.tasks.append(task)
+            self.tasks_vlaue.append(0) 
 
     def init_task_pool(self, nsteps, model_old, render = False):
         self.tasks = []
@@ -423,65 +433,52 @@ class Runner(object):
             self.tasks_vlaue = self.tasks_vlaue/self.tasks_vlaue.sum()            
             print(len(self.tasks), np.mean(self.tasks_vlaue), np.max(self.tasks_vlaue), np.min(self.tasks_vlaue))      
 
+    def update_task_value(self, task_list):
+        task_values = []
+        for i in range(len(task_list)):
+            task = task_list[i]
+            self.env.reset()  
+            full_obs = self.env.set_sim_data(task[0], task[1])
+            task_obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+
+            next_statef = self.model.state_feature([task_obs])
+            next_statef_pred = self.model.state_action_pred([task_obs])
+            diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
+            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
+
+            v_preds = self.model.value([task_obs])[0][-1]
+            diff_f_norm += v_preds*0.98
+            task_values.append(diff_f_norm)
+        return task_values
+
+    def compute_intrinsic_reward(self, obs):
+        # object_related_index = [3,4,5,11,12,13,14,15,16,17,18,19]
+        next_statef = self.model.state_feature([obs])
+        next_statef_pred = self.model.state_action_pred([obs])
+
+        diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
+        diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
+
+        return diff_f_norm #+ v_preds*self.gamma
 
     def run(self, nsteps, is_test = False, use_deterministic = False, render = False):
         mb_obs, mb_obs_next, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[],[]
         mb_infos = []
         epinfos = []
 
-        self.tasks = []
-        self.tasks_vlaue = []
+        # self.tasks = []
+        # self.tasks_vlaue = []
         
+        tra_tasks = []
+
         # update task value
-        for i in range(len(self.tasks)):
-            if self.tasks_vlaue[i] == 0:
-                continue
-            s, a, s_ = self.tasks_sas[i]
-            next_statef_pred = self.model.state_action_pred([s_], [a])
-            next_statef = self.model.state_feature([s_])
-            diff_f = (next_statef_pred - next_statef)
-            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
-            rewards_norm = diff_f_norm
-            self.tasks_vlaue[i] = rewards_norm   
-
-        print('average task value', np.asarray(self.tasks_vlaue).mean())
-
+        self.tasks_value = self.update_task_value(self.tasks)
+        # print('average task value', np.asarray(self.tasks_vlaue).mean())
         full_obs = self.env.reset()  
-        if len(self.tasks) > 0:
-            task_prob = np.asarray(self.tasks_vlaue)
-            task_prob = task_prob - task_prob.min()
-            task_prob = task_prob/task_prob.sum() 
-
-            task_index = np.random.choice(len(self.tasks), 1, p=task_prob)[0]
-            task = self.tasks[task_index]     
-            full_obs = self.env.set_sim_data(task[0], task[1])
-            # joblib.dump(self.tasks, '../model/checkpoints/tasks')
-            # joblib.dump(self.tasks_sas, '../model/checkpoints/tasks_sas')
-            # joblib.dump(self.tasks_vlaue, '../model/checkpoints/tasks_value')
-            min_index = np.argmin(np.asarray(self.tasks_vlaue))
-
         obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-        actions, values, neglogpacs = self.model.step([obs], self.dones)
 
-        # sas = [obs, actions, obs]
-        # task_obs = obs
-        # task_value = 0 #mb_values[-1][-1]  
-        # current_sim_data = self.env.get_sim_data()
-        # task = [current_sim_data, full_obs['desired_goal']]        
-        # for i in range(self.task_length):
-        #     self.tasks.append(task)
-        #     self.tasks_vlaue.append(task_value) 
-        #     self.tasks_sas.append(sas)            
-
-        # min_index = np.argmin(np.asarray(self.tasks_vlaue))
-
-        t_s = time.time()
-        ret = False
         step_count = 0
-        
         for t in range(nsteps):
-            # if t%500 == 0:
-                # print(t)
             current_sim_data = self.env.get_sim_data()
             
             if use_deterministic:
@@ -494,7 +491,6 @@ class Runner(object):
             mb_values.append(values[0])
             mb_neglogpacs.append(neglogpacs[0])
             mb_dones.append(self.dones)
-
             # next_statef_pred = self.model.state_action_pred([obs], actions)
 
             full_obs, r, self.dones, infos = self.env.step(actions[0])
@@ -503,41 +499,29 @@ class Runner(object):
             step_count += 1
 
             rewards = np.array([r, 0.0])
+            rewards[-1] = self.compute_intrinsic_reward(obs)
 
-            object_related_index = [3,4,5,11,12,13,14,15,16,17,18,19]
-            next_statef = self.model.state_feature([obs])
-            next_statef_pred = self.model.state_action_pred([obs], actions)
-
-            diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
-            diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
-            rewards_norm = diff_f_norm
-            rewards[-1] = rewards_norm
-
-            sas = [mb_obs[-1], mb_actions[-1], mb_obs_next[-1]]
-            task_obs = mb_obs[-1]
-            task_value = rewards_norm #mb_values[-1][-1]  
             task = [current_sim_data, full_obs['desired_goal']]
-
-            min_index = np.argmin(np.asarray(self.tasks_vlaue))
-            # if rewards_norm > self.tasks_vlaue[min_index]:
-            # print('replace', min_index, rewards_norm, self.tasks_vlaue[min_index])
-            # self.tasks[min_index] = task
-            # self.tasks_vlaue[min_index] = task_value
-            # self.tasks_sas[min_index] = sas
-
-            self.tasks.append(task)
-            self.tasks_vlaue.append(task_value) 
-            self.tasks_sas.append(sas)  
-                # count_down = 5
-
+            tra_tasks.append(task) 
             # ##########################################################
             ## for roboschool
             if render:
                 self.env.render('human')
                 # print(rewards)
 
-            v_preds = []
-            if self.dones or full_obs['achieved_goal'][-1] < 0.42 or step_count > 50:
+            if self.dones or full_obs['achieved_goal'][-1] < 0.4:
+                mb_dones[-1] = True
+
+                tra_tasks_value = self.update_task_value(tra_tasks)
+                for i in range(len(tra_tasks)):
+                    task = tra_tasks[i]
+                    value = tra_tasks_value[i]
+
+                    min_index = np.argmin(np.asarray(self.tasks_vlaue))
+                    if value > self.tasks_value[min_index]:
+                        self.tasks[min_index] = task
+                        self.tasks_vlaue[min_index] = value
+
                 step_count = 0
                 v_preds = self.model.value([obs])[0]
                 rewards[0] += self.gamma*v_preds[0]
@@ -545,33 +529,31 @@ class Runner(object):
                     rewards[-1] += self.gamma*v_preds[-1]
 
                 full_obs = self.env.reset()   
-                if len(self.tasks) > 0:
-                    min_index = np.argmin(np.asarray(self.tasks_vlaue))
                 task_prob = np.asarray(self.tasks_vlaue)
+                max_prob = task_prob.max()
                 mean_prob = task_prob.sum()/np.count_nonzero(self.tasks_vlaue)
                 task_prob = np.clip(task_prob, mean_prob, 100000)
                 task_prob = task_prob - task_prob.min()
                 task_prob = task_prob/task_prob.sum()        
                 # print(task_prob)         
-                if np.random.rand() > 1:
+                if np.random.rand() > 0:
                     task_index = np.random.choice(len(self.tasks), 1, p=task_prob)[0]
                 else:
                     task_index = np.argmax(self.tasks_vlaue)
 
-                if self.tasks_vlaue[task_index] != -1 and np.count_nonzero(self.tasks_vlaue) > 50:
-                # if np.random.rand() > 0.7 and self.tasks_vlaue[task_index] != -1 and np.count_nonzero(self.tasks_vlaue) > 50:
+                # if self.tasks_vlaue[task_index] != -1 and np.count_nonzero(self.tasks_vlaue) > 50:
+                if np.random.rand() > 0.5 and np.count_nonzero(self.tasks_vlaue) > 0:
                     min_index = task_index
-                    print(task_index, self.tasks_vlaue[task_index], mean_prob, len(self.tasks))
+                    print(comm_rank, task_index, self.tasks_vlaue[task_index], max_prob, len(self.tasks))
                     task = self.tasks[task_index]    
                     full_obs = self.env.set_sim_data(task[0], task[1])
                 else:
                     print('random init')
                 obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+                tra_tasks = []
 
-            # print(infos, full_obs['desired_goal'], full_obs['achieved_goal'])
             mb_rewards.append(rewards)
 
-        # print(1, time.time() - t_s, len(mb_rewards))
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_obs_next = np.asarray(mb_obs_next, dtype=self.obs.dtype)
@@ -608,7 +590,7 @@ class Runner(object):
         # for i in range(len(mb_values)):
         #     print(mb_rewards[i], mb_returns[i], mb_dones[i], mb_advs[i])
 
-        return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs, epinfos, ret)
+        return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs, epinfos)
         # return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
         #     epinfos, ret)
 

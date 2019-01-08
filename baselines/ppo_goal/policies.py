@@ -443,8 +443,8 @@ class MlpPolicy_Goal(object):
             # a = np.clip(a, -1, 1)
             return a, v, neglogp
 
-        def get_state_action_prediction(ob, action, *_args, **_kwargs):
-            return sess.run(x_next_feature_pred, {X_NEXT:ob, A:action})
+        def get_state_action_prediction(ob, *_args, **_kwargs):
+            return sess.run(x_next_feature_pred, {X_NEXT:ob})
 
         def get_state_feature(ob, *_args, **_kwargs):
             return sess.run(x_next_feature, {X_NEXT:ob})

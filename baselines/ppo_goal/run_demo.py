@@ -179,7 +179,7 @@ def run_test():
 
     runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.99)
     # runner.init_task_pool(15, model_old, render=True)
-    obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos, ret = runner.run(int(30000), is_test=False, render=True) #pylint: disable=E0632
+    obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(int(30000), is_test=False, render=True) #pylint: disable=E0632
     
     # tasks = joblib.load('/home/xi/workspace/model/checkpoints/tasks')
     # tasks_vlaue = joblib.load('/home/xi/workspace/model/checkpoints/tasks_value')
