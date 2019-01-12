@@ -60,34 +60,83 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     max_grad_norm=max_grad_norm, need_summary = need_summary)
 
     model = make_model('model', need_summary = True)
+    model_pm = make_model('model_pm', need_summary = True)
 
     start_update = 0
 
+    params_act_rand = model.get_current_params(params_type='actor')
+    params_value_rand = model.get_current_params(params_type='value')
+    params_pm_rand = model.get_current_params(params_type='forward')
+
+    # if start_update != 0:
     # load training policy
     checkdir = osp.join('../model', 'checkpoints')    
-    mocel_path = osp.join(checkdir, str(start_update))
+    mocel_path = osp.join(checkdir, str('12_1'))    
+    model.load(mocel_path)
+    params_pm = model.get_current_params(params_type='forward')
 
-    params_act = model.get_current_params(params_type='actor')
-    params_value = model.get_current_params(params_type='value')
 
-    if start_update != 0:
-        model.load(mocel_path)
-        # pf_sets = np.load('../model/checkpoints/pf.npy').tolist()
-        # pf_sets_convex = np.load('../model/checkpoints/pf_convex.npy').tolist()
-
-    # model.replace_params(params_act, params_type='actor') 
-    # model.replace_params(params_value, params_type='value') 
+    model.replace_params(params_act_rand, params_type='actor') 
+    model.replace_params(params_value_rand, params_type='value') 
+    # model.replace_params(params_pm_rand, params_type='forward') 
+    save_model(model, 0)
 
     runner = Runner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
 
     nupdates = total_timesteps//nbatch
 
     params_all_base = model.get_current_params(params_type='all')
+    num_saved = int(start_update/save_interval) + 1
+
+    model_list = ['0_0', '1_0', '2_0', '3_0', '4_0', '5_0', '6_0', '7_0', '8_0', '9_0', '10_0', '11_0', '12_0']
+
+    max_rew = 0
+    if comm_rank == 0:
+        best_model, max_rew = [], 0
+        for load_index in model_list:
+            mocel_path = '/home/xi/workspace/model/checkpoints/'+str(load_index)
+            model.load(mocel_path)
+            # model.load_and_increase_logstd(mocel_path)
+            model.replace_params(params_pm, params_type='forward') 
+            obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(model, int(1024), is_test=False, random_prob = 1) #pylint: disable=E0632
+
+            mean_rew = rewards[:,1].mean()
+            if mean_rew > max_rew:
+                best_model = mocel_path
+                max_rew = mean_rew
+                print(load_index, mean_rew)
+        
+        model.load_and_increase_logstd(best_model)
+        model.replace_params(params_pm, params_type='forward') 
+        save_model(model, 0)
+
+    MPI.COMM_WORLD.gather(max_rew)
+    #     params_all_base = model.get_current_params(params_type='all')
+    # params_all_base = comm.bcast(params_all_base, root=0)
 
     for update in range(start_update+1, nupdates+1):
         model.replace_params(params_all_base, params_type='all') 
 
-        obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(int(nsteps), is_test=False) #pylint: disable=E0632
+        load_index = np.random.choice(model_list, 1)[0]
+        mocel_path = '../model/checkpoints/'+str(load_index)
+        model.load(mocel_path)
+        model.replace_params(params_pm, params_type='forward') 
+
+        runner.run(model, int(nsteps), is_test=False) #pylint: disable=E0632
+        
+        mocel_path = '../model/checkpoints/'+str(0)
+        model.load(mocel_path)
+
+        obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(model, int(nsteps), is_test=False, random_prob = 0.7) #pylint: disable=E06327
+
+        # load_index = np.random.choice(model_list, 1)[0]
+        # mocel_path = '../model/checkpoints/'+str(load_index)
+        # model.load(mocel_path)
+        # obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(model, int(nsteps), is_test=False, random_prob = 1) #pylint: disable=E0632
+
+        # mocel_path = '../model/checkpoints/'+str('0')
+        # model.load(mocel_path)
+
 
         # advs = advs_ori[:, -1] #+ advs_ori[:, 1]*2
         advs = np.asarray(advs_ori)
@@ -127,7 +176,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
             mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
                                             all_obs, all_obs_next, all_ret, all_a, all_value, all_adv[:,-1], all_neglogpacs,
-                                            lr_p, cr_p, nsteps, model, update_type = 'all')   
+                                            lr_p, cr_p, nsteps, model, update_type = 'av')   
             print(mblossvals[0], mblossvals[1], mblossvals[2])
             display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
                                 all_reward, all_ret, all_value, all_adv, epinfos, model, logger)    
@@ -138,6 +187,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
                 save_model(model, update)
                 save_model(model, 0)
+                num_saved += 1
 
             first = False
             params_all_base = model.get_current_params(params_type='all')

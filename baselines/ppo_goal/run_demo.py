@@ -163,9 +163,9 @@ def run_test():
     # model_path = '/home/xi/workspace/model/log/exp/puck/normal/c_driven/checkpoint/1000'
     
     model.load(model_path)
+    # model.load_and_increase_logstd(model_path)
+    params_pm = model.get_current_params(params_type='forward')
 
-    model_path = '/home/xi/workspace/model/checkpoints/1'    
-    # model_old.load(model_path)
 
     full_obs = env.reset()
 
@@ -178,18 +178,42 @@ def run_test():
     # print(env.get_sim_data())
 
     runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.99, buffer_length = 10)
-    runner.gamma_list = [0.5]
+    runner.gamma_list = [0]
     nbatch_train = 128
     nbatch = 1024
     noptepochs = 5
     lr_p, cr_p = 0.0003, 0.2
 
+    num_saved = int(30/5) + 1
+
     # runner.init_task_pool(15, model_old, render=True)
+    model_list = ['0_0', '1_0', '2_0', '3_0', '4_0', '5_0', '6_0', '7_0', '8_0', '9_0', '10_0', '11_1']
+
+    # for load_index in model_list:
+    #     mocel_path = '/home/xi/workspace/model/checkpoints/'+str(load_index)
+    #     model.load(mocel_path)
+    #     # model.load_and_increase_logstd(model_path)
+
+    #     model.replace_params(params_pm, params_type='forward') 
+    #     obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(model, int(512), is_test=False, random_prob = 1) #pylint: disable=E0632
+
+    #     print(load_index, rewards[:,1].mean())
+
     for i in range(10000):
-        obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(int(nbatch), is_test=False, render=True) #pylint: disable=E0632
+        # load_index = np.random.choice(model_list, 1)[0]
+        # mocel_path = '/home/xi/workspace/model/checkpoints/'+str(load_index)
+        # model.load(mocel_path)
+        # model.replace_params(params_pm, params_type='forward') 
+
+        # runner.run(model, int(nbatch), is_test=False) #pylint: disable=E0632        
+   
+        mocel_path = '/home/xi/workspace/model/checkpoints/'+str('12_1')
+        model.load(mocel_path)
+        obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(model, int(nbatch), is_test=False, render=True, random_prob=1) #pylint: disable=E0632
         mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
                                                 obs, obs_next, returns, actions, values, advs_ori[:,-1], neglogpacs,
                                                 lr_p, cr_p, nbatch, model, update_type = 'all')   
+        print('updated')
     # tasks = joblib.load('/home/xi/workspace/model/checkpoints/tasks')
     # tasks_vlaue = joblib.load('/home/xi/workspace/model/checkpoints/tasks_value')
 

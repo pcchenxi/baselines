@@ -374,7 +374,7 @@ class MlpPolicy_Goal(object):
         return out
 
     def dense_layer_bn(self, input_s, output_size, activation, training):
-        out = tf.layers.dense(input_s, output_size)
+        out = tf.layers.dense(input_s, output_size, kernel_initializer=tf.contrib.layers.xavier_initializer(uniform=False, dtype=tf.float32))
         # out = tf.layers.batch_normalization(out, name=name+'_bn', training=training)
         out = activation(out)
         return out
@@ -398,7 +398,9 @@ class MlpPolicy_Goal(object):
 
         with tf.variable_scope(model_name, reuse=reuse):
             # x_feature = self.create_obs_feature_net(X, is_training, reuse=False)
-            x_next_feature = self.create_obs_feature_net(X_NEXT, is_training, units=[256,128,128,64], reuse=False, act=tf.nn.tanh)
+            # state = tf.concat([X, A, X_NEXT], axis=1)  
+            state_f = self.create_obs_feature_net(X_NEXT, is_training, units=[256,256,128], reuse=False)
+            x_next_feature = self.dense_layer(state_f, 128, None)
 
             with tf.variable_scope('actor', reuse=reuse):
                 h2_act = self.create_obs_feature_net(X, is_training, reuse=False)
@@ -416,10 +418,10 @@ class MlpPolicy_Goal(object):
             with tf.variable_scope('forward_dynamic', reuse=reuse):   
                 # x_next_feature = X_NEXT 
 
-                # state_action = tf.concat([X, A], axis=1)     
-                h2_fd = self.create_obs_feature_net(X_NEXT, is_training, units=[256, 128, 128, 64], reuse=False)
+                # state_action_state = tf.concat([X, A, X_NEXT], axis=1)     
+                h2_fd = self.create_obs_feature_net(X_NEXT, is_training, units=[256, 256, 128], reuse=False)
                 # x_next_feature_pred = self.dense_layer(h2_fd, 32, 'next_state_f', None) #fc(h2_fd, 'next_state_f', 32)
-                x_next_feature_pred = fc(h2_fd, 'next_state_f', 64)
+                x_next_feature_pred = self.dense_layer(h2_fd, 128, None)
 
         pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
 
@@ -429,6 +431,8 @@ class MlpPolicy_Goal(object):
         a0 = self.pd.sample()
         a1 = self.pd.mode()
         neglogp0 = self.pd.neglogp(a0)
+
+        pred_error = tf.sqrt(tf.reduce_sum(tf.square(x_next_feature_pred - x_next_feature), 1))
 
         def step(ob, *_args, **_kwargs):
             a, v, neglogp = sess.run([a0, vf, neglogp0], {X:ob})
@@ -443,11 +447,14 @@ class MlpPolicy_Goal(object):
             # a = np.clip(a, -1, 1)
             return a, v, neglogp
 
-        def get_state_action_prediction(ob, *_args, **_kwargs):
-            return sess.run(x_next_feature_pred, {X_NEXT:ob})
+        def get_state_action_prediction(ob, a, ob_, *_args, **_kwargs):
+            return sess.run(x_next_feature_pred, {X:ob, A:a, X_NEXT:ob_})
 
-        def get_state_feature(ob, *_args, **_kwargs):
-            return sess.run(x_next_feature, {X_NEXT:ob})
+        def get_state_feature(ob, a, ob_, *_args, **_kwargs):
+            return sess.run(x_next_feature, {X:ob, A:a, X_NEXT:ob_})
+
+        def get_pred_error(ob, a, ob_, *_args, **_kwargs):
+            return sess.run(pred_error, {X:ob, A:a, X_NEXT:ob_})
 
         self.X = X
         self.X_NEXT = X_NEXT
@@ -466,3 +473,4 @@ class MlpPolicy_Goal(object):
         self.x_next_feature_pred = x_next_feature_pred   
         self.state_action_pred = get_state_action_prediction
         self.state_feature = get_state_feature
+        self.pred_error = get_pred_error
