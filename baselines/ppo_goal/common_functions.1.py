@@ -66,15 +66,13 @@ class Model(object):
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
 
-        # loss_forward = tf.reduce_mean(tf.reduce_sum(tf.square(train_model.x_next_feature_pred - STATE_F), 1))
-        loss_forward = tf.reduce_mean(tf.reduce_sum(tf.square(train_model.x_next_feature_pred - train_model.x_next_feature), 1))
+        loss_forward = tf.reduce_mean(tf.reduce_sum(tf.square(train_model.x_next_feature_pred - STATE_F), 1))
 
-        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
+        self.loss_names = ['policy_loss', 'value_loss', 'forward_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
 
         with tf.variable_scope(model_name):
             params = tf.global_variables(scope=model_name)
             params_actor = tf.global_variables(scope=model_name+'/actor')
-            params_logstd = tf.global_variables(scope=model_name+'/actor/logstd')
             params_value = tf.global_variables(scope=model_name+'/value')
             params_forward = tf.global_variables(scope=model_name+'/forward_dynamic')
 
@@ -118,14 +116,6 @@ class Model(object):
         for p, loaded_p in zip(params_actor, network_params_actor):
             restores_actor.append(p.assign(loaded_p))
 
-        network_params_logstd = []
-        for param in params_logstd:
-            layer_params = tf.placeholder(tf.float32, param.shape)
-            network_params_logstd.append(layer_params)
-        restores_logstd = []
-        for p, loaded_p in zip(params_logstd, network_params_logstd):
-            restores_logstd.append(p.assign(loaded_p))
-
         network_params_value = []
         for param in params_value:
             layer_params = tf.placeholder(tf.float32, param.shape)
@@ -144,7 +134,7 @@ class Model(object):
         ############################################################################################
 
 
-        def train(lr, cliprange, obs, obs_next, returns, actions, values, advs, rewards, fixed_state_f, neglogpacs, train_type='all'):
+        def train(lr, cliprange, obs, obs_next, returns, actions, values, advs, fixed_state_f, neglogpacs, train_type='all'):
             # advs_suggest = advs_suggest / (advs_suggest.std() + 1e-8)
             # obs_ret = np.concatenate((obs, returns[:, 0:-1]), axis=1)
             obs_ret = np.concatenate((obs, actions), axis=1)
@@ -161,27 +151,19 @@ class Model(object):
                 # print(vp.shape, ret.shape, v_l1.shape)
 
                 return sess.run(
-                    [pg_loss, loss_v, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_forward],
+                    [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v, train_forward],
                     td_map                
                 )[:-3]
             if train_type == 'av':
                 return sess.run(
-                    [pg_loss, loss_v, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v],
+                    [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v],
                     td_map                
                 )[:-2]
             if train_type == 'pm':
-                if rewards[:, -1].mean() > 0:
-                    return sess.run(
-                        [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_forward],
-                        td_map                
-                    )[:-1]
-                else:
-                    print('skip', rewards[:, -1].mean())
-                    return []
-
-        def train_pm(lr, obs, obs_):
-            td_map = {train_model.is_training: True, train_model.X:obs, train_model.X_NEXT:obs_, LR:lr}
-            return sess.run([loss_forward, train_forward], td_map)[:-1]
+                return sess.run(
+                    [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_forward],
+                    td_map                
+                )[:-1]
 
         def get_neglogpac(obs, actions):
             return sess.run(neglogpac, {train_model.X:obs, A:actions})
@@ -194,7 +176,6 @@ class Model(object):
             ps = sess.run(params)
             joblib.dump(ps, save_path)
             joblib.dump(ps, save_path_base)
-            print('save model', save_path_base)
 
         def load(load_path, load_value = True):
             loaded_params = joblib.load(load_path)
@@ -211,15 +192,16 @@ class Model(object):
             sess.run(restores_all, feed_dict={i: d for i, d in zip(network_params_all, loaded_params)})
             # print('loaded')
 
-        def load_and_increase_logstd(load_path, increase_amount = 0.2):
+        def load_and_increase_logstd(load_path):
             loaded_params = joblib.load(load_path)
-            sess.run(restores_all, feed_dict={i: d for i, d in zip(network_params_all, loaded_params)})
-
-            # param_actor = sess.run(params_actor)
-            # sess.run(restores_actor, feed_dict={i: d + (np.random.rand(*np.asarray(d).shape)-0.5)*0.3 for i, d in zip(network_params_actor, param_actor)})
-
-            param_logstd = sess.run(params_logstd)
-            sess.run(restores_logstd, feed_dict={i: d+np.random.rand()*0.3 for i, d in zip(network_params_logstd, param_logstd)})
+            # print('parama', len(loaded_params), load_path)
+            restores = []
+            for p, loaded_p in zip(params, loaded_params):
+                find_vf = p.name.find('logstd')
+                if find_vf != -1:
+                    new_param = loaded_p + 0.15 #np.zeros_like(loaded_p)
+                    restores.append(p.assign(new_param))
+            sess.run(restores)
 
             #     if load_value == False and find_vf != -1:
             #         continue
@@ -289,7 +271,6 @@ class Model(object):
             self.summary_writer.flush()
 
         self.train = train
-        self.train_pm = train_pm
         self.train_model = train_model
         # self.act_model = act_model
         self.step = train_model.step
@@ -328,7 +309,7 @@ class Model(object):
 
 class Runner(object):
 
-    def __init__(self, *, env, model, nsteps, gamma, lam, buffer_length = 200):
+    def __init__(self, *, env, model, nsteps, gamma, lam, buffer_length = 2):
         self.env = env
         self.model = model
         nenv = 1 #env.num_envs
@@ -533,11 +514,11 @@ class Runner(object):
         print('replay')
         return full_obs
 
-    def run(self, model, nsteps, is_test = False, use_deterministic = False, render = False, random_prob = 0.5, need_pm = True):
+    def run(self, model, nsteps, is_test = False, use_deterministic = False, render = False, random_prob = 0.5):
         self.model = model
         mb_obs, mb_obs_next, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs, mb_boost = [],[],[],[],[],[],[],[]
         mb_infos, epinfos, mb_fixed_state_f = [], [], []
-        mb_pm_state = []
+
         # self.tasks = []
         # self.tasks_value = []
         
@@ -545,7 +526,6 @@ class Runner(object):
         tra_tasks_value = []
         tra_tasks_sas = []
         tra_tasks_data = []
-        tra_rewards = []
 
         # update task value
         # print('average task value before', np.asarray(self.tasks_value).mean())
@@ -579,55 +559,30 @@ class Runner(object):
 
             mb_obs_next.append(obs.copy())
             fixed_state_f = self.model.state_feature([mb_obs[-1]], [mb_actions[-1]], [mb_obs_next[-1]])[0]
+            if r == 0:
+                fixed_state_f += 1
+            mb_fixed_state_f.append(fixed_state_f)
 
             step_count += 1
 
             rewards = np.array([r, 0.0])
-            # rewards[-1] = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
-
-            if r == 0:
-                # rewards[-1] = np.sqrt(np.sum(np.full(len(obs), 3)*np.full(len(obs), 3)))   
-                fixed_state_f += 3
-             
-            mb_fixed_state_f.append(fixed_state_f)
+            rewards[-1] = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
 
             task = [current_sim_data, full_obs['desired_goal']]
             sas = [mb_obs[-1], mb_actions[-1], mb_obs_next[-1]]
             tra_tasks.append(task) 
             tra_tasks_value.append(rewards[-1])
             tra_tasks_sas.append(sas)
-            tra_rewards.append(r)
             # ##########################################################
             ## for roboschool
             if render:
                 self.env.render('human')
-                # print(rewards, values)
+                print(rewards, values)
             
-            if self.dones or full_obs['achieved_goal'][-1] < 0.4 or step_count > 150 or t == nsteps-1:
+            if self.dones or full_obs['achieved_goal'][-1] < 0.4 or step_count > 100:
                 mb_dones[-1] = True
                 updated = False
                 tra_tasks_value = self.update_task_value(tra_tasks, tra_tasks_sas)
-
-                extra_add = 0
-                for m in range(len(tra_tasks_sas)):
-                    start_obs = tra_tasks_sas[m][0]
-                    tra_r = []
-                    for n in range(m, len(tra_tasks_sas), 1):
-                        _, a, obs_ = tra_tasks_sas[n]
-                        emp_r = self.compute_intrinsic_reward(start_obs, a, obs_)
-                        tra_r.append(emp_r)
-                        mb_pm_state.append([start_obs, obs_])
-                        if m - n > 30:
-                            break
-                    length = len(tra_tasks_sas)-m
-
-                    state_emp = (np.asarray(tra_r).sum() + extra_add)/length #np.asarray(tra_r).sum()/length
-                    extra_add = np.asarray(tra_r[1:]).sum()
-                    mb_rewards.append([tra_rewards[m], state_emp])
-                    if render:
-                        print(state_emp)  
-
-                # print(tra_rewards)
 
                 # tra_argmax = np.argmax(np.asarray(tra_tasks_value))
                 # print(tra_tasks_value[tra_argmax] , self.tasks_value[min_index])
@@ -647,7 +602,7 @@ class Runner(object):
                     sas = tra_tasks_sas[i]
 
                     # min_index = np.argmin(np.asarray(self.tasks_value))
-                    if value > self.tasks_value[min_index] and r != 0:
+                    if value > self.tasks_value[min_index]:
                         # print(value, self.tasks_value[min_index], value > self.tasks_value[min_index])
                         self.tasks[min_index] = task
                         self.tasks_value[min_index] = value
@@ -663,9 +618,9 @@ class Runner(object):
                 # rewards[0] += self.gamma*v_preds[0]
                 mb_boost[-1][0] = self.gamma*v_preds[0]
 
-                # if self.dones or step_count > 100:
+                if self.dones or step_count > 100:
                     # rewards[-1] += self.gamma*v_preds[-1]
-                mb_boost[-1][-1] = self.gamma*v_preds[-1]
+                    mb_boost[-1][-1] = self.gamma*v_preds[-1]
 
                 full_obs = self.env.reset()   
                 task_prob = np.asarray(self.tasks_value)
@@ -700,14 +655,12 @@ class Runner(object):
                 tra_tasks_value = []
                 tra_tasks_sas = []
                 tra_tasks_data = []
-                tra_rewards = []
-            # mb_rewards.append(rewards)
+            mb_rewards.append(rewards)
 
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_obs_next = np.asarray(mb_obs_next, dtype=self.obs.dtype)
         mb_fixed_state_f = np.asarray(mb_fixed_state_f, dtype=self.obs.dtype)
-        mb_pm_state = np.asarray(mb_pm_state, dtype=self.obs.dtype)
 
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
         mb_actions = np.asarray(mb_actions)
@@ -742,7 +695,7 @@ class Runner(object):
         # for i in range(len(mb_values)):
         #     print(mb_rewards[i], mb_returns[i], mb_dones[i], mb_advs[i])
 
-        return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_fixed_state_f, mb_pm_state, mb_neglogpacs, epinfos)
+        return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_fixed_state_f, mb_neglogpacs, epinfos)
         # return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
         #     epinfos, ret)
 
@@ -793,55 +746,30 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
 
 
 def nimibatch_update(   nbatch, noptepochs, nbatch_train,
-                        obs, obs_next, returns, actions, values, advs, rewards, fixed_state_f, neglogpacs,
-                        lrnow, cliprangenow, model, update_type = 'all', allow_early_stop = True):
+                        obs, obs_next, returns, actions, values, advs, fixed_state_f, neglogpacs,
+                        lrnow, cliprangenow, nsteps, model, update_type = 'all', allow_early_stop = True):
     mblossvals = []
     nbatch_train = int(nbatch_train)
 
-    rewards_mean = rewards.mean()
     # inds = np.arange(nbatch)
     inds = np.arange(len(obs))
     early_stop = False
     for ep in range(noptepochs):
         # print('ep', ep, len(obs), nbatch, nbatch_train)
-        # if update_type == 'pm':
-        #     print(rewards[:,-1])
-        #     rewards[:,-1] = model.pred_error(obs, actions, obs_next)
-        #     print(rewards[:,-1])
         np.random.shuffle(inds)
         for start in range(0, len(obs), nbatch_train):
+            params_all_base = model.get_current_params(params_type='all')
             end = start + nbatch_train
             mbinds = inds[start:end]
-            slices = (arr[mbinds] for arr in (obs, obs_next, returns, actions, values, advs, rewards, fixed_state_f, neglogpacs))
+            slices = (arr[mbinds] for arr in (obs, obs_next, returns, actions, values, advs, fixed_state_f, neglogpacs))
 
             losses = model.train(lrnow, cliprangenow, *slices, train_type=update_type)
-            if losses != []:
-                mblossvals.append(losses)
+            mblossvals.append(losses)
 
     lossvals = np.mean(mblossvals, axis=0)
     return lossvals
 
-def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, lrnow, model, update):
-    mblossvals = []
-    nbatch_train = int(nbatch_train)
 
-    obs = pm_states[:, 0]
-    obs_ = pm_states[:, 1]
-
-    inds = np.arange(len(obs))
-    for ep in range(noptepochs):
-        np.random.shuffle(inds)
-        for start in range(0, len(obs), nbatch_train):
-            end = start + nbatch_train
-            mbinds = inds[start:end]
-            slices = (arr[mbinds] for arr in (obs, obs_))
-
-            losses = model.train_pm(lrnow, *slices)
-            if losses != []:
-                mblossvals.append(losses)
-
-    lossvals = np.mean(mblossvals, axis=0)
-    model.write_summary('loss/forward', lossvals[0], update)
 
 def compute_advs( advs_ori, dir_w):
 

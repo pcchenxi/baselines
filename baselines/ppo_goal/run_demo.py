@@ -180,7 +180,7 @@ def run_test():
     runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.99, buffer_length = 10)
     runner.gamma_list = [0]
     nbatch_train = 128
-    nbatch = 1024
+    nbatch = 128
     noptepochs = 5
     lr_p, cr_p = 0.0003, 0.2
 
@@ -206,13 +206,13 @@ def run_test():
         # model.replace_params(params_pm, params_type='forward') 
 
         # runner.run(model, int(nbatch), is_test=False) #pylint: disable=E0632        
-   
-        mocel_path = '/home/xi/workspace/model/checkpoints/'+str('12_1')
+        print(i)
+        mocel_path = '/home/xi/workspace/model/checkpoints/'+str(0)
         model.load(mocel_path)
-        obs, obs_next, returns, dones, actions, values, advs_ori, rewards, neglogpacs, epinfos = runner.run(model, int(nbatch), is_test=False, render=True, random_prob=1) #pylint: disable=E0632
-        mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
-                                                obs, obs_next, returns, actions, values, advs_ori[:,-1], neglogpacs,
-                                                lr_p, cr_p, nbatch, model, update_type = 'all')   
+        obs, obs_next, returns, dones, actions, values, advs_ori, fixed_f, rewards, _, neglogpacs, epinfos = runner.run(model, int(nbatch), is_test=False, render=True, random_prob=1) #pylint: disable=E0632
+        # mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
+        #                                         obs, obs_next, returns, actions, values, advs_ori[:,-1], neglogpacs,
+        #                                         lr_p, cr_p, nbatch, model, update_type = 'all')   
         print('updated')
     # tasks = joblib.load('/home/xi/workspace/model/checkpoints/tasks')
     # tasks_vlaue = joblib.load('/home/xi/workspace/model/checkpoints/tasks_value')
