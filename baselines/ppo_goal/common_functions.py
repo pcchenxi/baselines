@@ -48,13 +48,6 @@ class Model(object):
         neglogpac = train_model.pd.neglogp(train_model.A)
         entropy = tf.reduce_mean(train_model.pd.entropy())
 
-        vpred = train_model.vf
-        # vpredclipped = OLDVPRED + tf.clip_by_value(train_model.vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
-        vf_losses1 = tf.square(vpred - RETRUN)
-        # vf_losses2 = tf.square(vpredclipped - RETRUN)
-        # vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
-        vf_loss = tf.reduce_mean(vf_losses1)
-
         ratio = tf.exp(OLDNEGLOGPAC - neglogpac)
         pg_losses = -ADV * ratio
         pg_losses2 = -ADV * tf.clip_by_value(ratio, 1.0 - CLIPRANGE, 1.0 + CLIPRANGE)
@@ -62,6 +55,16 @@ class Model(object):
         # pg_loss = tf.reduce_mean(pg_losses2)
         approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - OLDNEGLOGPAC))
         clipfrac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio - 1.0), CLIPRANGE)))
+
+        
+        vpred = train_model.vf
+        # vpredclipped = OLDVPRED + tf.clip_by_value(train_model.vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
+        vf_losses1 = tf.square(vpred - RETRUN)
+        vf_losses1 = tf.reduce_sum(vf_losses1, axis = 1)*ratio
+        # vf_losses2 = tf.square(vpredclipped - RETRUN)
+        # vf_loss = .5 * tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
+        vf_loss = tf.reduce_mean(vf_losses1)
+
 
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
@@ -352,11 +355,16 @@ class Runner(object):
         self.gamma_list = np.random.rand(nprocs) * 0.1
         self.gamma_list[0] = 0
 
+        self.history_states = []
+        self.history_states_index = 0
+        self.history_buff_length = 500
+
         self.init_task_buffer()
 
     def init_task_buffer(self):
         full_obs = self.env.reset()  
         obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+        self.full_obs = full_obs.copy()
         actions, values, neglogpacs = self.model.step([obs], self.dones)
 
         sas = [obs, actions, obs]
@@ -369,6 +377,9 @@ class Runner(object):
             self.tasks_sas.append(sas) 
             self.tasks_tra.append([sas])
             self.tasks_init_data.append([])
+
+        for i in range(self.history_buff_length):
+            self.history_states.append(obs)
 
     def init_task_pool(self, nsteps, model_old, render = False):
         self.tasks = []
@@ -393,7 +404,8 @@ class Runner(object):
             # if len(self.tasks) > 0 and np.random.rand()>0.5:
             #     task_index = np.random.randint(len(self.tasks))
             #     task = self.tasks[task_index]     
-            #     full_obs = self.env.set_sim_data(task[0], task[1])
+            #     full_obs = self.env.set_sim_data(task[0], task[1])        print(vf_losses1.shape)
+
 
             start_obs = full_obs['observation']
             task_data = self.env.get_sim_data() 
@@ -521,8 +533,15 @@ class Runner(object):
 
         # diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
         # diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
+        # return self.model.pred_error([obs], [a], [obs_])[0]
 
-        return self.model.pred_error([obs], [a], [obs_])[0]
+        obs_list = np.full((self.history_buff_length, len(obs_)), obs_)
+        a_list = np.full((self.history_buff_length, len(a)), a)
+        start_states = np.asarray(self.history_states)
+
+        reward_list = self.model.pred_error(start_states, a_list, obs_list)
+        # print(reward_list)
+        return reward_list.mean()
 
     def reset_env_sas(self, init_data, tra_sas):
         full_obs = self.env.set_sim_data(init_data[0], init_data[1])
@@ -551,9 +570,11 @@ class Runner(object):
         # print('average task value before', np.asarray(self.tasks_value).mean())
         self.tasks_value = self.update_task_value(self.tasks, self.tasks_sas, value_list=self.tasks_value)
         # print('average task value after', np.asarray(self.tasks_value).mean())
-        full_obs = self.env.reset()  
-        obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+
         min_index = np.argmin(np.asarray(self.tasks_value))
+
+        full_obs = self.full_obs.copy()
+        obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
 
         step_count = 0
         for t in range(nsteps):
@@ -565,6 +586,7 @@ class Runner(object):
             else:
                 actions, values, neglogpacs = self.model.step([obs], self.dones)
 
+            self.full_obs = full_obs.copy()
             mb_obs.append(obs.copy())
             mb_actions.append(actions[0])
             mb_values.append(values[0])
@@ -583,7 +605,6 @@ class Runner(object):
             step_count += 1
 
             rewards = np.array([r, 0.0])
-            # rewards[-1] = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
 
             if r == 0:
                 # rewards[-1] = np.sqrt(np.sum(np.full(len(obs), 3)*np.full(len(obs), 3)))   
@@ -597,35 +618,53 @@ class Runner(object):
             tra_tasks_value.append(rewards[-1])
             tra_tasks_sas.append(sas)
             tra_rewards.append(r)
+
+            # tra_r = []
+            for m in range(len(tra_tasks_sas)-1, -1, -1):
+                start_obs = tra_tasks_sas[m][0]
+            #     in_r = 0
+            #     if need_pm:
+            #         in_r = self.compute_intrinsic_reward(start_obs, actions[0], obs)
+            #     tra_r.append(in_r)
+                mb_pm_state.append([start_obs, obs])
+
+            #     if len(tra_tasks_sas) - m > 20:
+            #         break
+            # tra_r = np.asarray(tra_r)
+            # rewards[-1] = tra_r.mean()
+            if need_pm:
+                rewards[-1] = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
+
+
             # ##########################################################
             ## for roboschool
             if render:
                 self.env.render('human')
                 # print(rewards, values)
             
-            if self.dones or full_obs['achieved_goal'][-1] < 0.4 or step_count > 150 or t == nsteps-1:
-                mb_dones[-1] = True
+            if self.dones or full_obs['achieved_goal'][-1] < 0.4 or step_count > 50 or t == nsteps-1:
+                self.dones = True
                 updated = False
                 tra_tasks_value = self.update_task_value(tra_tasks, tra_tasks_sas)
 
-                extra_add = 0
-                for m in range(len(tra_tasks_sas)):
-                    start_obs = tra_tasks_sas[m][0]
-                    tra_r = []
-                    for n in range(m, len(tra_tasks_sas), 1):
-                        _, a, obs_ = tra_tasks_sas[n]
-                        emp_r = self.compute_intrinsic_reward(start_obs, a, obs_)
-                        tra_r.append(emp_r)
-                        mb_pm_state.append([start_obs, obs_])
-                        if m - n > 30:
-                            break
-                    length = len(tra_tasks_sas)-m
+                # extra_add = 0
+                # for m in range(len(tra_tasks_sas)):
+                #     start_obs = tra_tasks_sas[m][0]
+                #     tra_r = []
+                #     for n in range(m, len(tra_tasks_sas), 1):
+                #         _, a, obs_ = tra_tasks_sas[n]
+                #         emp_r = self.compute_intrinsic_reward(start_obs, a, obs_)
+                #         tra_r.append(emp_r)
+                #         mb_pm_state.append([start_obs, obs_])
+                #         if m - n > 30:
+                #             break
+                #     length = len(tra_tasks_sas)-m
 
-                    state_emp = (np.asarray(tra_r).sum() + extra_add)/length #np.asarray(tra_r).sum()/length
-                    extra_add = np.asarray(tra_r[1:]).sum()
-                    mb_rewards.append([tra_rewards[m], state_emp])
-                    if render:
-                        print(state_emp)  
+                #     state_emp = (np.asarray(tra_r).sum() + extra_add)/length #np.asarray(tra_r).sum()/length
+                #     extra_add = np.asarray(tra_r[1:]).sum()
+                #     mb_rewards.append([tra_rewards[m], state_emp])
+                #     if render:
+                #         print(state_emp)  
 
                 # print(tra_rewards)
 
@@ -695,13 +734,15 @@ class Runner(object):
                     if render:
                         print('---random init')
                 obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
+                self.full_obs = full_obs.copy()
 
                 tra_tasks = []
                 tra_tasks_value = []
                 tra_tasks_sas = []
                 tra_tasks_data = []
                 tra_rewards = []
-            # mb_rewards.append(rewards)
+
+            mb_rewards.append(rewards)
 
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
@@ -723,10 +764,15 @@ class Runner(object):
         mb_advs = np.zeros_like(mb_rewards)
         lastgaelam = 0
 
+        for i in range(0, len(mb_obs), 10):
+            self.history_states[self.history_states_index] = mb_obs[i]
+            self.history_states_index += 1
+            self.history_states_index = self.history_states_index % self.history_buff_length
+
 
         for t in reversed(range(len(mb_values))):
             if t == len(mb_values) - 1:
-                nextnonterminal = 1.0 - self.dones
+                nextnonterminal = 0
                 nextvalues = last_values
             else:
                 nextnonterminal = 1.0 - mb_dones[t+1]     
@@ -738,9 +784,11 @@ class Runner(object):
 
         mb_returns = mb_advs + mb_values
 
+
         # print(mb_values.shape, mb_rewards.shape, mb_returns.shape)
-        # for i in range(len(mb_values)):
-        #     print(mb_rewards[i], mb_returns[i], mb_dones[i], mb_advs[i])
+        if render:
+            for i in range(len(mb_values)):
+                print(mb_rewards[i], mb_returns[i], mb_advs[i], mb_values[i])
 
         return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_fixed_state_f, mb_pm_state, mb_neglogpacs, epinfos)
         # return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
