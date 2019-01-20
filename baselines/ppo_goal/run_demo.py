@@ -136,7 +136,7 @@ def run_test():
     # env = gym.make("hockeypuck-v0")
     # env.seed()
     # RoboschoolHumanoidFlagrunHarder  FetchSlide FetchPush FetchPickAndPlace
-    env = gym.make("FetchPickAndPlace-v1")
+    env = gym.make("FetchPush-v1")
 
     policy = MlpPolicy
     ob_spaces = env.observation_space.spaces.items()
@@ -159,11 +159,11 @@ def run_test():
     model = make_model('model', need_summary = False)
     # model_old = make_model('model_old', need_summary = False)
 
-    model_path = '/home/xi/workspace/model/checkpoints/10'
+    model_path = '/home/xi/workspace/model/checkpoints/0'
     # model_path = '/home/xi/workspace/model/log/exp/puck/normal/c_driven/checkpoint/1000'
     
     model.load(model_path)
-    # model.load_and_increase_logstd(model_path)
+    # # model.load_and_increase_logstd(model_path)
     params_pm = model.get_current_params(params_type='forward')
     params_value = model.get_current_params(params_type='value')
 
@@ -178,7 +178,7 @@ def run_test():
 
     # print(env.get_sim_data())
 
-    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.99, buffer_length = 10)
+    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.97, buffer_length = 10)
     runner.gamma_list = [0]
     nbatch_train = 128
     nbatch = 50
@@ -215,7 +215,8 @@ def run_test():
             # model.replace_params(params_pm, params_type='forward') 
             # model.replace_params(params_value, params_type='value') 
 
-            obs, obs_next, returns, dones, actions, values, advs_ori, fixed_f, rewards, _, neglogpacs, epinfos = runner.run(model, int(nbatch), is_test=False, render=True, random_prob=1) #pylint: disable=E0632
+            obs, obs_next, returns, dones, actions, values, advs_ori, fixed_f, rewards, _, neglogpacs, epinfos = \
+                runner.run(model, int(nbatch), is_test=True, render=True, random_prob=1, use_off_policy=False) #pylint: disable=E0632
             # mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
             #                                         obs, obs_next, returns, actions, values, advs_ori[:,-1], neglogpacs,
             #                                         lr_p, cr_p, nbatch, model, update_type = 'all')   

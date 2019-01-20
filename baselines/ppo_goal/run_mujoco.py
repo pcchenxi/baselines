@@ -33,18 +33,18 @@ def train(env_id, num_timesteps, seed):
     envs = []
     for _ in range(ncpu):
         envs.append(make_env)
-    env = gym.make("FetchPickAndPlace-v1") #SubprocVecEnv(envs)
+    env = gym.make("FetchPush-v1") #SubprocVecEnv(envs)
     # env = VecNormalize(env)
     # set_global_seeds(seed)
     policy = MlpPolicy
 
-    nsteps = 200/ncpu
+    nsteps = 500/ncpu
 
     ppo2.learn(policy=policy, env=env, nsteps=int(nsteps), nminibatches=int(256),
-        lam=0.99, gamma=0.99, noptepochs=1, log_interval=1,
+        lam=0.97, gamma=0.99, noptepochs=1, log_interval=1,
         ent_coef=0.000, # 0.003,
         lr= 3e-4,
-        cliprange=0.2,
+        cliprange=0.1,
         #total_timesteps=num_timesteps,
         total_timesteps = 10e+9,
         save_interval = 1)
