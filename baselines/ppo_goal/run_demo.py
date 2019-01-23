@@ -178,7 +178,7 @@ def run_test():
 
     # print(env.get_sim_data())
 
-    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.97, buffer_length = 10)
+    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.98, buffer_length = 10)
     runner.gamma_list = [0]
     nbatch_train = 128
     nbatch = 50

@@ -13,6 +13,15 @@ nprocs = comm.Get_size()
 REWARD_NUM = 1
 
 class Model(object):
+    def build_restore_param(self, params):
+        params_all = []
+        for param in params:
+            layer_params = tf.placeholder(tf.float32, param.shape)
+            params_all.append(layer_params)
+        restores_all = []
+        for p, loaded_p in zip(params, params_all):
+            restores_all.append(p.assign(loaded_p))
+        return params_all, restores_all
 
     def __init__(self, *, policy, ob_space, ac_space, goal_space, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, model_name, lr, need_summary = False):
@@ -38,13 +47,13 @@ class Model(object):
         # A = train_model.pdtype.sample_placeholder([None])
 
         ADV = tf.placeholder(tf.float32, [None], name='ph_adv')
-        REWARD = tf.placeholder(tf.float32, [None], name='ph_Rew')
-        RETRUN = tf.placeholder(tf.float32, [None, 2], name='ph_R')
+        REWARD = tf.placeholder(tf.float32, [None,1], name='ph_Rew')
+        RETRUN = tf.placeholder(tf.float32, [None, 1], name='ph_R')
         OLDNEGLOGPAC = tf.placeholder(tf.float32, [None], name='ph_old_neglogpac')
-        OLDVPRED = tf.placeholder(tf.float32, [None, 2], name='ph_oldvpred')
+        OLDVPRED = tf.placeholder(tf.float32, [None, 1], name='ph_oldvpred')
         LR = tf.placeholder(tf.float32, [], name='ph_lr')
         CLIPRANGE = tf.placeholder(tf.float32, [], name='ph_cliprange')
-        STATE_F = tf.placeholder(tf.float32, [None, 128], name='fixed_state_f')
+        STATE_F = tf.placeholder(tf.float32, [None, 64], name='fixed_state_f')
 
         neglogpac = train_model.pd.neglogp(train_model.A)
         entropy = tf.reduce_mean(train_model.pd.entropy())
@@ -54,11 +63,12 @@ class Model(object):
         pg_losses2 = -ADV * tf.clip_by_value(ratio, 1.0 - CLIPRANGE, 1.0 + CLIPRANGE)
         pg_losses3 = tf.maximum(pg_losses, pg_losses2)
 
-        adv_mean, adv_std = tf.nn.moments(pg_losses3, [0])
-        pg_loss_normalized = (pg_losses3 - adv_mean)/adv_std
-        pg_loss = tf.reduce_mean(pg_loss_normalized)
+        # adv_mean, adv_std = tf.nn.moments(pg_losses3, [0])
+        # pg_loss_normalized = (pg_losses3 - adv_mean)/adv_std
+        # pg_loss = tf.reduce_mean(pg_loss_normalized)
 
-        # pg_loss = tf.reduce_mean(pg_losses2)
+        pg_loss = tf.reduce_mean(pg_losses3)
+
         approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - OLDNEGLOGPAC))
         clipfrac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio - 1.0), CLIPRANGE)))
 
@@ -70,45 +80,48 @@ class Model(object):
         # vf_loss = tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
         vf_loss = tf.reduce_mean(vf_losses1)
 
-        pg_loss1_off = -ADV * tf.clip_by_value(ratio, 0, 10)
-        adv_mean_off, adv_std_off = tf.nn.moments(pg_loss1_off, [0])
-        pg_loss_off_normalized = (pg_loss1_off - adv_mean_off)/adv_std_off
-        pg_loss_off = tf.reduce_mean(pg_loss_off_normalized)
+        # pg_loss1_off = -ADV * tf.clip_by_value(ratio, 0, 10)
+        # adv_mean_off, adv_std_off = tf.nn.moments(pg_loss1_off, [0])
+        # pg_loss_off_normalized = (pg_loss1_off - adv_mean_off)/(adv_std_off + 1e-8)
+        # pg_loss_off = tf.reduce_mean(pg_loss_off_normalized)
 
-        vf_losses1_off = tf.reduce_sum(vf_losses1, axis = 1) * tf.clip_by_value(ratio, 0, 10)
-        vf_loss_off = tf.reduce_mean(vf_losses1_off)
+        # vf_losses1_off = tf.reduce_sum(vf_losses1, axis = 1) * tf.clip_by_value(ratio, 0, 10)
+        # vf_loss_off = tf.reduce_mean(vf_losses1_off)
 
         loss_a = pg_loss - entropy * ent_coef
         loss_v = vf_loss
 
-        loss_a_off = pg_loss_off
-        loss_v_off = vf_loss_off
+        # loss_a_off = pg_loss_off
+        # loss_v_off = vf_loss_off
 
         # loss_forward = tf.reduce_mean(tf.reduce_sum(tf.square(train_model.x_next_feature_pred - STATE_F), 1))
-        # loss_forward = tf.reduce_mean(tf.reduce_sum(tf.square(train_model.x_next_feature_pred - train_model.x_next_feature), 1))
-        error_rew = tf.square(train_model.p_error-REWARD)
-        loss_forward = tf.reduce_mean(error_rew)
+        loss_forward = tf.reduce_mean(tf.reduce_sum(tf.square(train_model.x_next_feature_pred - train_model.x_next_feature), 1))
+        # error_rew = tf.square(train_model.p_error-REWARD)
+        # loss_forward = tf.reduce_mean(error_rew)
 
+        eir_diff = tf.square(train_model.expected_ir - REWARD)
+        loss_eir = tf.reduce_mean(eir_diff)
 
         self.loss_names = ['policy_loss', 'value_loss', 'forward', 'policy_entropy', 'approxkl', 'clipfrac', 'grad_norm']
 
         with tf.variable_scope(model_name):
             params = tf.global_variables(scope=model_name)
             params_actor = tf.global_variables(scope=model_name+'/actor')
-            params_logstd = tf.global_variables(scope=model_name+'/actor/logstd')
+            # params_logstd = tf.global_variables(scope=model_name+'/actor/logstd')
             params_value = tf.global_variables(scope=model_name+'/value')
             params_forward = tf.global_variables(scope=model_name+'/forward_dynamic')
             params_forward_train = tf.global_variables(scope=model_name+'/forward_dynamic/pred_state_feature')
+            params_expected_ir = tf.global_variables(scope=model_name+'/forward_dynamic/expected_ir')
 
 
         grads_a = tf.gradients(loss_a, params_actor)
-        grads_a_off = tf.gradients(loss_a_off, params_actor)
+        # grads_a_off = tf.gradients(loss_a_off, params_actor)
         max_grad_norm = 1
         if max_grad_norm is not None:
             grads_a, _grad_norm_a = tf.clip_by_global_norm(grads_a, max_grad_norm)
-            grads_a_off, _grad_norm_a = tf.clip_by_global_norm(grads_a_off, max_grad_norm)
+            # grads_a_off, _grad_norm_a = tf.clip_by_global_norm(grads_a_off, max_grad_norm)
         grads_a = list(zip(grads_a, params_actor))
-        grads_a_off = list(zip(grads_a_off, params_actor))
+        # grads_a_off = list(zip(grads_a_off, params_actor))
 
 
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -117,11 +130,14 @@ class Model(object):
             optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
             train_a = optimizer_a.apply_gradients(grads_a)
 
-            optimizer_a_off = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-            train_a_off = optimizer_a_off.apply_gradients(grads_a_off)
+            # optimizer_a_off = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            # train_a_off = optimizer_a_off.apply_gradients(grads_a_off)
 
             # optimizer_a = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
             # train_a = optimizer_a.minimize(loss_a, var_list=params_actor)
+
+            # optimizer_v_off = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            # train_v_off = optimizer_v_off.minimize(loss_v_off, var_list=params_value)
 
             optimizer_v = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
             train_v = optimizer_v.minimize(loss_v, var_list=params_value)
@@ -129,55 +145,18 @@ class Model(object):
             optimizer_forward = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
             train_forward = optimizer_forward.minimize(loss_forward, var_list=params_forward_train)
 
-            optimizer_v_off = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-            train_v_off = optimizer_v_off.minimize(loss_v_off, var_list=params_value)
-
             # optimizer_a_off = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
             # train_a_off = optimizer_a_off.minimize(loss_a_off, var_list=params_actor)
 
-            optimizer_forward = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
-            train_forward = optimizer_forward.minimize(loss_forward, var_list=params_forward_train)
+            optimizer_ir = tf.train.AdamOptimizer(learning_rate=LR, epsilon=1e-5)
+            train_ir = optimizer_ir.minimize(loss_eir, var_list=params_expected_ir)
 
         ############################################################################################
-        network_params_all = []
-        for param in params:
-            layer_params = tf.placeholder(tf.float32, param.shape)
-            network_params_all.append(layer_params)
-        restores_all = []
-        for p, loaded_p in zip(params, network_params_all):
-            restores_all.append(p.assign(loaded_p))
-
-        network_params_actor = []
-        for param in params_actor:
-            layer_params = tf.placeholder(tf.float32, param.shape)
-            network_params_actor.append(layer_params)
-        restores_actor = []
-        for p, loaded_p in zip(params_actor, network_params_actor):
-            restores_actor.append(p.assign(loaded_p))
-
-        network_params_logstd = []
-        for param in params_logstd:
-            layer_params = tf.placeholder(tf.float32, param.shape)
-            network_params_logstd.append(layer_params)
-        restores_logstd = []
-        for p, loaded_p in zip(params_logstd, network_params_logstd):
-            restores_logstd.append(p.assign(loaded_p))
-
-        network_params_value = []
-        for param in params_value:
-            layer_params = tf.placeholder(tf.float32, param.shape)
-            network_params_value.append(layer_params)
-        restores_value = []
-        for p, loaded_p in zip(params_value, network_params_value):
-            restores_value.append(p.assign(loaded_p)) 
-
-        network_params_fm = []
-        for param in params_forward:
-            layer_params = tf.placeholder(tf.float32, param.shape)
-            network_params_fm.append(layer_params)
-        restores_fm = []
-        for p, loaded_p in zip(params_forward, network_params_fm):
-            restores_fm.append(p.assign(loaded_p))            
+        network_params_all, restores_all = self.build_restore_param(params)
+        network_params_actor, restores_actor = self.build_restore_param(params_actor)
+        network_params_value, restores_value = self.build_restore_param(params_value)
+        network_params_fm, restores_fm = self.build_restore_param(params_forward)
+        network_params_eir, restores_eir = self.build_restore_param(params_expected_ir)
         ############################################################################################
 
 
@@ -186,9 +165,9 @@ class Model(object):
             # obs_ret = np.concatenate((obs, returns[:, 0:-1]), axis=1)
             # obs_ret = np.concatenate((obs, actions), axis=1)
 
-            # advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
-            td_map = {train_model.is_training: True, train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns, 
-                    REWARD:rewards, STATE_F:fixed_state_f, LR:lr, CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values, }
+            advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
+            td_map = {train_model.is_training: True, train_model.X:obs, train_model.X_NEXT:obs_next, train_model.A:actions, ADV:advs, RETRUN:returns.reshape(-1,1), 
+                    REWARD:rewards.reshape(-1,1), STATE_F:fixed_state_f, LR:lr, CLIPRANGE:cliprange, OLDNEGLOGPAC:neglogpacs, OLDVPRED:values.reshape(-1,1), }
 
             if train_type == 'all':
                 if use_off_policy: 
@@ -202,20 +181,21 @@ class Model(object):
                         td_map                
                     )[:-3]
             if train_type == 'av':             
-                if use_off_policy:
-                    # r, lv, lvoff, la_off = sess.run([ratio, vf_losses1, vf_losses1_off, loss_a_off], td_map)
-                    # print(la_off)
-                    # for rs, las, laoffs in zip(r, la, laoff):
-                    #     print(rs, las, laoffs)
-                    return sess.run(
-                        [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a_off, train_v_off],
-                        td_map                
-                    )[:-2]             
-                else:
-                    return sess.run(
-                        [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v],
-                        td_map                
-                    )[:-2]
+                # if use_off_policy:
+                #     # r, lv, lvoff, la_off = sess.run([ratio, vf_losses1, vf_losses1_off, loss_a_off], td_map)
+                #     # print(la_off)
+                #     # for rs, las, laoffs in zip(r, la, laoff):
+                #     #     print(rs, las, laoffs)
+                #     print('off')
+                #     return sess.run(
+                #         [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a_off, train_v_off],
+                #         td_map                
+                #     )[:-2]             
+                # else:
+                return sess.run(
+                    [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v],
+                    td_map                
+                )[:-2]
             if train_type == 'pm':
                 return sess.run(
                     [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_forward],
@@ -223,9 +203,12 @@ class Model(object):
                 )[:-1]
 
 
-        def train_pm(lr, obs, a, obs_, fixed_state_f, rewards):
-            td_map = {train_model.is_training: True, train_model.X:obs, train_model.A:a, train_model.X_NEXT:obs_, STATE_F:fixed_state_f, REWARD:rewards, LR:lr}
-            return sess.run([loss_forward, train_forward], td_map)[:-1]
+        def train_pm(lr, obs, a, obs_, fixed_state_f, rewards, train_type):
+            td_map = {train_model.is_training: True, train_model.X:obs, train_model.A:a, train_model.X_NEXT:obs_, STATE_F:fixed_state_f, REWARD:rewards.reshape(-1,1), LR:lr}
+            if train_type == 'pm':
+                return sess.run([loss_forward, train_forward], td_map)[:-1]
+            if train_type == 'trace':
+                return sess.run([loss_eir, train_ir], td_map)[:-1]
 
         def get_neglogpac(obs, actions):
             return sess.run(neglogpac, {train_model.X:obs, A:actions})
@@ -281,7 +264,9 @@ class Model(object):
             elif params_type == 'value':
                 net_params = sess.run(params_value)
             elif params_type == 'forward':
-                net_params = sess.run(params_forward)            
+                net_params = sess.run(params_forward)
+            elif params_type == 'eir':
+                net_params = sess.run(params_expected_ir)                        
             return np.asarray(net_params)
 
         def replace_params(loaded_params, params_type = 'all'):
@@ -293,6 +278,8 @@ class Model(object):
                 sess.run(restores_value, feed_dict={i: d for i, d in zip(network_params_value, loaded_params)})
             elif params_type == 'forward':
                 sess.run(restores_fm, feed_dict={i: d for i, d in zip(network_params_fm, loaded_params)})
+            elif params_type == 'eir':
+                sess.run(restores_eir, feed_dict={i: d for i, d in zip(network_params_eir, loaded_params)})
 
         def write_summary(summary_name, value, step):
             summary = tf.Summary()
@@ -347,6 +334,7 @@ class Model(object):
         self.load_and_increase_logstd = load_and_increase_logstd
         self.replace_params = replace_params
         self.get_current_params = get_current_params
+        self.get_expected_ir = train_model.get_expected_ir
 
         self.state_action_pred = train_model.state_action_pred
         self.state_feature = train_model.state_feature
@@ -379,193 +367,12 @@ class Runner(object):
         self.nenv = nenv
         self.obs = np.zeros([1, 28], dtype=model.train_model.X.dtype.name)
         # self.obs[:] = env.reset()
-        self.gamma = gamma #np.full(REWARD_NUM, gamma)
-        # self.gamma[-1] = 0.98
-        self.lam = lam
+        self.gamma = np.array([gamma, gamma])
+        self.lam = np.array([lam, 1])
         self.nsteps = nsteps
         self.dones = [False for _ in range(nenv)]
 
-        self.tasks_sas = []
-        self.tasks = []
-        self.tasks_tra = []
-        self.tasks_init_data = []
-        self.tasks_value = []
-        self.min_value = 0
-        self.index = 0
-        self.task_length = buffer_length
-        self.gamma_list = np.random.rand(nprocs) * 0.1
-        self.gamma_list[0] = 0
-
-        self.history_states = []
-        self.history_states_index = 0
-        self.history_buff_length = 500
-
-        self.init_task_buffer()
-
-    def init_task_buffer(self):
-        full_obs = self.env.reset()  
-        obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-        self.full_obs = full_obs.copy()
-        actions, values, neglogpacs = self.model.step([obs], self.dones)
-
-        sas = [obs, actions, obs]
-        task_obs = obs
-        current_sim_data = self.env.get_sim_data()
-        task = [current_sim_data, full_obs['desired_goal']]        
-        for i in range(self.task_length):
-            self.tasks.append(task)
-            self.tasks_value.append(0.0)
-            self.tasks_sas.append(sas) 
-            self.tasks_tra.append([sas])
-            self.tasks_init_data.append([])
-
-        for i in range(self.history_buff_length):
-            self.history_states.append(obs)
-
-    def init_task_pool(self, nsteps, model_old, render = False):
-        self.tasks = []
-        self.tasks_value = []
-
-        tra_obs = []
-        tra_data = []
-
-        full_obs = self.env.reset()       
-        # full_obs = self.env.set_sim_data(sim_data, sim_goal)
-
-        start_obs = full_obs['observation']
-        task_data = self.env.get_sim_data()
-        # sim_goal = full_obs['desired_goal']
-
-        tra_obs.append(full_obs)
-        tra_data.append(task_data)
-
-        self.obs[:] = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-        for t in range(nsteps):
-            full_obs = self.env.reset()
-            # if len(self.tasks) > 0 and np.random.rand()>0.5:
-            #     task_index = np.random.randint(len(self.tasks))
-            #     task = self.tasks[task_index]     
-            #     full_obs = self.env.set_sim_data(task[0], task[1])        print(vf_losses1.shape)
-
-
-            start_obs = full_obs['observation']
-            task_data = self.env.get_sim_data() 
-            goal_pre = full_obs['achieved_goal'] #np.zeros(len(full_obs['achieved_goal'])) #full_obs['achieved_goal']
-
-            tra_tasks = []
-            tra_values = []
-
-            for s in range(150):
-                actions, values, neglogpacs = self.model.step(self.obs, self.dones)
-                full_obs, rewards, self.dones, infos = self.env.step(actions[0])
-                self.obs[:] = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-
-                # check task
-                task_obs = np.concatenate((start_obs, full_obs['achieved_goal']), axis=0) 
-                task_value = self.model.value([task_obs])[0,0]
-                # task_value_old = model_old.value([task_obs])[0,0]
-                # task = [task_data, full_obs['achieved_goal']]
-                if render:
-                    self.env.render('human')
-                    print(task_value, values, full_obs['achieved_goal'])
-                # print(task_value, goal_pre, full_obs['achieved_goal'])
-
-                # save current state data
-                current_sim_data = self.env.get_sim_data()
-                tra_obs.append(full_obs)
-                tra_data.append(current_sim_data)
-
-                diff = abs(goal_pre - full_obs['achieved_goal'])
-                if np.any(diff > 0.01):
-                    for ob, data in zip(tra_obs, tra_data):
-                        task_obs = np.concatenate((ob['observation'], full_obs['achieved_goal']), axis=0) 
-                        task_value = self.model.value([task_obs])[0,0]     
-
-                        task = [data, full_obs['achieved_goal']]
-                        tra_tasks.append(task)
-                        tra_values.append(task_value)      
-
-                    task_obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-                    task_value = self.model.value([task_obs])[0,0]     
-                    task = [current_sim_data, full_obs['desired_goal']]
-                    tra_tasks.append(task)
-                    tra_values.append(task_value) 
-
-                    if render:
-                        print('add task')
-                # task_value = np.clip(task_value, 0.000001, 1)
-
-                goal_pre = full_obs['achieved_goal']
-
-                if self.dones or full_obs['achieved_goal'][-1] < 0.4:
-                    tra_obs = []
-                    tra_data = []     
-
-                    for task, task_value, i in zip(tra_tasks, tra_values, range(len(tra_tasks))):
-                        if i%3 == 0:
-                            self.env.reset()  
-                            full_obs = self.env.set_sim_data(task[0], task[1])
-                            task_obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-                            real_value = self.model.value([task_obs])[0,0] 
-                            real_value_old = model_old.value([task_obs])[0,0]
-                            # if render:
-                            #     print(real_value, real_value_old)
-                            self.env.render('human')
-                            # print(real_value)
-                            value_diff = abs(real_value - real_value_old)
-                            if real_value < 0:
-                                self.tasks.append(task)
-                                self.tasks_value.append(real_value)    
-                    if render:
-                        print('task length', len(tra_tasks), len(self.tasks))
-                    break   
-
-            if len(self.tasks) > 300:
-                break
-
-        if len(self.tasks) > 0:
-            print(len(self.tasks), np.mean(self.tasks_value), np.max(self.tasks_value), np.min(self.tasks_value))      
-            self.tasks_value = -np.asarray(self.tasks_value)
-            mean_v = self.tasks_value.mean()
-            # final_task, final_v = [], []
-            # for task, v in zip(self.tasks, self.tasks_value):
-            #     if v > mean_v:
-            #         final_task.append(task)
-            #         final_v.append(v)
-            # self.tasks = final_task.copy()
-            # self.tasks_value = final_v.copy()
-            self.tasks_value = self.tasks_value - self.tasks_value.min()
-            self.tasks_value = self.tasks_value/self.tasks_value.sum()            
-            print(len(self.tasks), np.mean(self.tasks_value), np.max(self.tasks_value), np.min(self.tasks_value))      
-
-    def update_task_value(self, task_list, sas_list, value_list=[]):
-        task_values = []
-        for i in range(len(task_list)):
-            if value_list != [] and value_list[i] == 0:
-                diff_f_norm = 0
-            else:
-                task = task_list[i]
-                obs = sas_list[i][0]
-                a = sas_list[i][1]
-                obs_ = sas_list[i][2]
-
-                if np.random.rand() > 0:
-                    diff_f_norm = self.compute_intrinsic_reward(obs, a, obs_)
-                else:
-                    self.env.reset()  
-                    full_obs = self.env.set_sim_data(task[0], task[1])
-                    obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-                    
-                    full_obs, _, _, _ = self.env.step(a)
-                    obs_ = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
-
-                    diff_f_norm = self.compute_intrinsic_reward(obs, a, obs_)
-
-                v_preds = self.model.value([obs_])[0][-1]
-                diff_f_norm += v_preds*self.gamma_list[comm_rank]
-
-            task_values.append(diff_f_norm)
-        return task_values
+        self.full_obs = self.env.reset()
 
     def compute_intrinsic_reward(self, obs, a, obs_):
         # # object_related_index = [3,4,5,11,12,13,14,15,16,17,18,19]
@@ -584,50 +391,20 @@ class Runner(object):
         # # print(reward_list)
         # return reward_list.mean()
 
-    def reset_env_sas(self, init_data, tra_sas):
-        full_obs = self.env.set_sim_data(init_data[0], init_data[1])
-        print(len(tra_sas))
-        for s, a, _ in tra_sas:
-            full_obs, r, self.dones, infos = self.env.step(a)
-            self.env.render('human')
-        print('replay')
-        return full_obs
 
     def run(self, model, nsteps, is_test = False, use_deterministic = False, render = False, random_prob = 0.5, use_off_policy=False):
         self.model = model
 
-        if use_off_policy:
-            self.lam = 0
-        else:
-            self.lam = 0.97
-
         mb_obs, mb_obs_next, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs, mb_boost = [],[],[],[],[],[],[],[]
         mb_infos, epinfos, mb_fixed_state_f = [], [], []
         mb_pm_state = []
-        # self.tasks = []
-        # self.tasks_value = []
-        
-        tra_tasks = []
-        tra_tasks_value = []
-        tra_tasks_sas = []
-        tra_tasks_data = []
-        tra_rewards = []
-
-        # update task value
-        # print('average task value before', np.asarray(self.tasks_value).mean())
-        self.tasks_value = self.update_task_value(self.tasks, self.tasks_sas, value_list=self.tasks_value)
-        # print('average task value after', np.asarray(self.tasks_value).mean())
-
-        min_index = np.argmin(np.asarray(self.tasks_value))
 
         full_obs = self.full_obs.copy()
         obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
 
+        batch_rew = []
         step_count = 0
-        for t in range(nsteps):
-            current_sim_data = self.env.get_sim_data()
-            tra_tasks_data.append([current_sim_data, full_obs['desired_goal']])
-            
+        for t in range(nsteps):            
             if use_deterministic:
                 actions, values, neglogpacs = self.model.step_max([obs], self.dones)
             else:
@@ -648,105 +425,18 @@ class Runner(object):
             obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
 
             mb_obs_next.append(obs.copy())
+
             fixed_state_f = self.model.state_feature([mb_obs[-1]], [mb_actions[-1]], [mb_obs_next[-1]])[0]
-
-            step_count += 1
-
-            rewards = np.array([r, 0.0])
-
-            # if r == 0:
-            #     # rewards[-1] = np.sqrt(np.sum(np.full(len(obs), 3)*np.full(len(obs), 3)))   
-            #     fixed_state_f += 0.1
-             
             mb_fixed_state_f.append(fixed_state_f)
-
-            task = [current_sim_data, full_obs['desired_goal']]
-            sas = [mb_obs[-1], mb_actions[-1], mb_obs_next[-1]]
-            tra_tasks.append(task) 
-            tra_tasks_value.append(rewards[-1])
-            tra_tasks_sas.append(sas)
-            tra_rewards.append(r)
-
-            # print(mb_pm_state[-1])
-            # print()
-            # # tra_r = []
-            # for m in range(len(tra_tasks_sas)-1, -1, -1):
-            #     start_obs = tra_tasks_sas[m][0]
-            # #     in_r = 0
-            # #     if need_pm:
-            # #         in_r = self.compute_intrinsic_reward(start_obs, actions[0], obs)
-            # #     tra_r.append(in_r)
-            #     mb_pm_state.append([start_obs, obs])
-
-            #     if len(tra_tasks_sas) - m > 20:
-            #         break
-            # tra_r = np.asarray(tra_r)
-            # rewards[-1] = tra_r.mean()
-
-            rewards[-1] = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1]) #self.model.get_self_reward([obs])[0]
 
             # ##########################################################
             ## for roboschool
             if render:
                 self.env.render('human')
-                # print(rewards, values)
+                # print(values)
             
             if self.dones or full_obs['achieved_goal'][-1] < 0.35 or step_count > 300 or t == nsteps-1:
                 self.dones = True
-                updated = False
-                tra_tasks_value = self.update_task_value(tra_tasks, tra_tasks_sas)
-
-                # extra_add = 0
-                # for m in range(len(tra_tasks_sas)):
-                #     start_obs = tra_tasks_sas[m][0]
-                #     tra_r = []
-                #     for n in range(m, len(tra_tasks_sas), 1):
-                #         _, a, obs_ = tra_tasks_sas[n]
-                #         emp_r = self.compute_intrinsic_reward(start_obs, a, obs_)
-                #         tra_r.append(emp_r)
-                #         mb_pm_state.append([start_obs, obs_])
-                #         if m - n > 30:
-                #             break
-                #     length = len(tra_tasks_sas)-m
-
-                #     state_emp = (np.asarray(tra_r).sum() + extra_add)/length #np.asarray(tra_r).sum()/length
-                #     extra_add = np.asarray(tra_r[1:]).sum()
-                #     mb_rewards.append([tra_rewards[m], state_emp])
-                #     if render:
-                #         print(state_emp)  
-
-                # print(tra_rewards)
-
-                # tra_argmax = np.argmax(np.asarray(tra_tasks_value))
-                # print(tra_tasks_value[tra_argmax] , self.tasks_value[min_index])
-                # if tra_tasks_value[tra_argmax] > self.tasks_value[min_index]:
-                #     self.tasks_tra[min_index] = tra_tasks_sas[:tra_argmax]
-                #     self.tasks_init_data[min_index] = tra_tasks_data[0]
-                #     self.tasks[min_index] = task
-                #     self.tasks_value[min_index] = tra_tasks_value[tra_argmax]
-                #     self.tasks_sas[min_index] = sas                    
-                #     updated = True
-
-                v_before = self.tasks_value[min_index]
-
-                for i in range(len(tra_tasks)):
-                    task = tra_tasks[i]
-                    value = tra_tasks_value[i]
-                    sas = tra_tasks_sas[i]
-
-                    # min_index = np.argmin(np.asarray(self.tasks_value))
-                    if value > self.tasks_value[min_index] and r != 0:
-                        # print(value, self.tasks_value[min_index], value > self.tasks_value[min_index])
-                        self.tasks[min_index] = task
-                        self.tasks_value[min_index] = value
-                        self.tasks_sas[min_index] = sas
-                        updated = True
-                if render:
-                    if updated:
-                        print('    updated', min_index, v_before, self.tasks_value[min_index])
-                    else:
-                        print('    maxvalu', np.asarray(tra_tasks_value).max())
-                step_count = 0
                 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! only for this setting!!!!!!!!!!!!
                 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! only for this setting!!!!!!!!!!!!
                 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! only for this setting!!!!!!!!!!!!
@@ -754,52 +444,53 @@ class Runner(object):
                     v_preds = values[0] #self.model.value([obs])[0]
                 else:
                     v_preds = self.model.value([obs])[0]
-                # rewards[0] += self.gamma*v_preds[0]
-                mb_boost[-1][0] = self.gamma*v_preds[0]
 
-                # if self.dones or step_count > 100:
-                    # rewards[-1] += self.gamma*v_preds[-1]
-                mb_boost[-1][-1] = self.gamma*v_preds[-1]      
+                mb_boost[-1] = (self.gamma*v_preds)
 
                 full_obs = self.env.reset()   
-                task_prob = np.asarray(self.tasks_value)
-                max_prob = task_prob.max()
-                mean_prob = task_prob.sum()/np.count_nonzero(self.tasks_value)
-                # task_prob = np.clip(task_prob, mean_prob, 100000)
-                task_prob = task_prob - task_prob.min()
-                task_prob = task_prob/task_prob.sum()        
-                # print(task_prob)         
-                if np.random.rand() > 0:
-                    task_index = np.random.choice(len(self.tasks), 1, p=task_prob)[0]
-                    # task_index = np.random.choice(len(self.tasks), 1)[0]
-                else:
-                    task_index = np.argmax(self.tasks_value)
-
-                # if self.tasks_value[task_index] != -1 and np.count_nonzero(self.tasks_value) > 50:
-                if np.random.rand() > random_prob and np.count_nonzero(self.tasks_value) > 3:
-                    min_index = task_index
-                    task = self.tasks[task_index]
-                    if render:
-                        print('---', comm_rank, task_index, self.tasks_value[task_index], max_prob, len(self.tasks))
-                    # task = self.tasks[task_index]    
-                    full_obs = self.env.set_sim_data(task[0], task[1])
-                    # full_obs = self.reset_env_sas(self.tasks_init_data[task_index], self.tasks_tra[task_index])
-                else:
-                    min_index = np.argmin(np.asarray(self.tasks_value))
-                    if render:
-                        print('---random init')
                 obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
                 self.full_obs = full_obs.copy()
 
-                tra_tasks = []
-                tra_tasks_value = []
-                tra_tasks_sas = []
-                tra_tasks_data = []
-                tra_rewards = []
+            # r_pm = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
+            # if r == 0:
+            #     r_pm_true = 1
+            # else:
+            #     r_pm_true = 0 #np.minimum(r_pm, 1)
 
+            # r_pm_true = np.minimum(r_pm, 1)
+
+            # print(r_pm_true)
+            # if step_count > 0:        
+            #     start = len(mb_rewards) - step_count
+            #     for i in range(start, len(mb_rewards), 1):
+            #         p = len(mb_rewards) - i -1
+            #         scale = np.power(0.9, p)
+            #         print(r_pm_true*scale, mb_rewards[i][1], mb_rewards[i][-1])
+            #         if r_pm_true > mb_rewards[i][1]:
+            #             mb_rewards[i][-1] = r_pm_true*scale
+            #         # mb_rewards[i][-1] = np.maximum(r_pm_true*scale, mb_rewards[i][-1])
+            #         print(mb_rewards[i][-1])
+            #         mb_rewards[i][-2] = np.maximum(mb_rewards[i][-2], mb_rewards[i][-1])
+            #     print()
+            
+            r_pm = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
+            r_potental = self.model.value([mb_obs_next[-1]])[0][-1] - values[0][-1]*self.gamma[0]
+            scale = 1 - r_pm/0.5
+            scale = np.clip(scale, 0, 1)
+            r_ints = r_pm + r_potental*scale*4 + (r+1)*1
+
+            rewards = np.array([r_ints, r_pm+(r+1)*1])
+
+            # rewards[1] = r_pm + r +1 #self.model.get_self_reward([obs])[0]
             mb_rewards.append(rewards)
-            if is_test and self.dones:
-                break
+            batch_rew.append([r, r_pm, r_potental, scale])
+
+            step_count += 1
+
+            if self.dones:
+                step_count = 0
+                if is_test:
+                    break
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_obs_next = np.asarray(mb_obs_next, dtype=self.obs.dtype)
@@ -810,6 +501,7 @@ class Runner(object):
         mb_actions = np.asarray(mb_actions)
         mb_values = np.asarray(mb_values, dtype=np.float32)
         mb_boost = np.asarray(mb_boost, dtype=np.float32)
+        batch_rew = np.asarray(batch_rew)
 
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
@@ -819,12 +511,6 @@ class Runner(object):
         mb_returns = np.zeros_like(mb_rewards)
         mb_advs = np.zeros_like(mb_rewards)
         lastgaelam = 0
-
-        for i in range(0, len(mb_obs), 10):
-            self.history_states[self.history_states_index] = mb_obs[i]
-            self.history_states_index += 1
-            self.history_states_index = self.history_states_index % self.history_buff_length
-
 
         for t in reversed(range(len(mb_values))):
             if t == len(mb_values) - 1:
@@ -840,11 +526,12 @@ class Runner(object):
 
         mb_returns = mb_advs + mb_values
 
-
         # print(mb_values.shape, mb_rewards.shape, mb_returns.shape)
         if render:
-            for i in range(len(mb_values)):
-                print(mb_rewards[i], mb_returns[i], mb_advs[i], mb_values[i], mb_actions[i])
+            print(self.gamma, self.lam)
+            with np.printoptions(precision=3, suppress=True):
+                for i in range(len(mb_values)):
+                    print(batch_rew[i], mb_rewards[i], mb_returns[i], mb_advs[i][0], mb_values[i])
 
         # print(comm_rank, use_off_policy, self.lam, mb_rewards[:,1].mean())
         return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_fixed_state_f, mb_pm_state, mb_neglogpacs, epinfos)
@@ -878,7 +565,7 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
     # lossvals = np.mean(mblossvals, axis=0)
     if update % log_interval == 0 or update == 1:
         step_label = update
-        for i in range(REWARD_NUM+1):
+        for i in range(2):
             model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
             model.write_summary('reward/mean_rew_'+str(i+1), np.mean(rewards[:,i]), step_label)
             # model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
@@ -903,21 +590,16 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
     mblossvals = []
     nbatch_train = int(nbatch_train)
 
-    rewards = rewards[:,0] +1
+    # rewards = rewards[:,0]
     # inds = np.arange(nbatch)
     inds = np.arange(len(obs))
     early_stop = False
     for ep in range(noptepochs):
-        # print('ep', ep, len(obs), nbatch, nbatch_train)
-        # if update_type == 'pm':
-        #     print(rewards[:,-1])
-        #     rewards[:,-1] = model.pred_error(obs, actions, obs_next)
-        #     print(rewards[:,-1])
         np.random.shuffle(inds)
         for start in range(0, len(obs), nbatch_train):
             end = start + nbatch_train
             mbinds = inds[start:end]
-            slices = (arr[mbinds] for arr in (obs, obs_next, returns, actions, values, advs, rewards, fixed_state_f, neglogpacs))
+            slices = (arr[mbinds] for arr in (obs, obs_next, returns[:,0], actions, values[:,0], advs, rewards, fixed_state_f, neglogpacs))
 
             losses = model.train(lrnow, cliprangenow, *slices, train_type=update_type, use_off_policy=use_off_policy)
             if losses != []:
@@ -926,7 +608,7 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
     lossvals = np.mean(mblossvals, axis=0)
     return lossvals
 
-def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, rewards, lrnow, model, update):
+def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, rewards, lrnow, model, update, mode, use_max = False):
     mblossvals = []
     nbatch_train = int(nbatch_train)
 
@@ -935,7 +617,11 @@ def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, rewards, lrnow, mod
     a = pm_states[1]
     obs_ = pm_states[2]
     fixed_state_f = pm_states[3]
-    rewards = rewards[:,0] +1
+    # rewards = rewards[:,0]
+
+    if mode == 'trace' and use_max:
+        current_eir = model.get_expected_ir(obs)[0]
+        rewards = np.maximum(rewards, current_eir)
 
     inds = np.arange(len(obs))
     for ep in range(noptepochs):
@@ -945,13 +631,15 @@ def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, rewards, lrnow, mod
             mbinds = inds[start:end]
             slices = (arr[mbinds] for arr in (obs, a, obs_, fixed_state_f, rewards))
 
-            losses = model.train_pm(lrnow, *slices)
+            losses = model.train_pm(lrnow, *slices, mode)
             if losses != []:
                 mblossvals.append(losses)
 
     lossvals = np.mean(mblossvals, axis=0)
-    model.write_summary('loss/forward', lossvals[0], update)
-
+    if mode == 'pm':
+        model.write_summary('loss/forward', lossvals[0], update)
+    elif mode == 'trace':
+        model.write_summary('loss/trace', lossvals[0], update)
 
 def compute_advs( advs_ori, dir_w):
 

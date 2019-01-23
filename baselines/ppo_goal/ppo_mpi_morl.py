@@ -57,9 +57,9 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     params_value_rand = model.get_current_params(params_type='value')
     params_pm_rand = model.get_current_params(params_type='forward')
 
-    checkdir = osp.join('../model', 'checkpoints')    
-    mocel_path = osp.join(checkdir, str('0'))    
-    model.load(mocel_path)
+    # checkdir = osp.join('../model', 'checkpoints')    
+    # mocel_path = osp.join(checkdir, str('0'))    
+    # model.load(mocel_path)
     params_pm = model.get_current_params(params_type='forward')
     params_value = model.get_current_params(params_type='value')
 
@@ -77,14 +77,14 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
     params_all_base = model.get_current_params(params_type='all')
 
-    mode_name = ['av', 'pm']
+    mode_name = ['av', 'pm', 'select']
 
     best_model = []
     best_score = 0
     mocel_path = []
-    save_index = 80
-    save_interval = 50
-    save_count = save_index*save_interval  
+    save_interval = 100
+    save_count = 2*save_interval
+    save_index = int(save_count/save_interval)
 
     select_count = 0
 
@@ -95,24 +95,23 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     select_count = 0
     obs_buffer, obs_next_buffer, action_buffer, fixed_f_buffer, reward_buffer = [], [], [], [], []
 
-    pm_update_count = 0
-    mode = 'av'
+    av_update_num = 1000
+    av_count = 0
+    pm_count = 0
+    select_count = 0
+    mode = 'pm'
 
     for update in range(start_update+1, nupdates+1):
         # model.replace_params(params_all_base, params_type='all')
 
-        if update%300 == 0 and comm_rank == 0:
-            mode = 'pm'
-            pm_update_count = 1
-
-        if pm_update_count > 0:
-            mode = 'pm'
-            pm_update_count -= 1
-    
-        # if select_count > 0 and comm_rank == 0:
-        #     mode = 'select'
-        #     select_count -= 1
-
+        if mode == 'pm':
+            pm_count += 1
+        elif mode == 'av':
+            av_count += 1
+        elif mode == 'select':
+            select_count += 1                    
+        elif mode == 'trace':
+            pm_count += 1   
 
         # collect trajectories
         mode = comm.bcast(mode, root=0)
@@ -121,12 +120,11 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
         if mode == 'av':
             # mocel_path = '../model/checkpoints/'+str(0)  # use the current policy to sample trajectory for training policy
             # model.load(mocel_path)
-            if update%3 == 0:
+            if False: #update%3 == 0:
                 use_off_policy = True
                 path_index = np.random.randint(0, save_index, 1)[0]
             else:
                 use_off_policy = False
-                # path_index = np.random.choice(policy_list, 1)[0] # randomly select a past policy to sample, for picking the best policy for new reward model
                 path_index = 0
 
             mocel_path = '../model/checkpoints/'+str(path_index)
@@ -135,23 +133,22 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             model.replace_params(params_value.copy(), params_type='value')   
 
             obs, obs_next, returns, dones, actions, values, advs_ori, rewards, fixed_state_f, pm_states, neglogpacs, epinfos = runner.run(model, int(nsteps), use_off_policy=use_off_policy, random_prob = 1) #pylint: disable=E06327
-        elif mode == 'pm' or mode == 'select':
-            path_index = np.random.randint(1, save_index, 1)[0] # randomly select a past policy to sample, for picking the best policy for new reward model
+        elif mode == 'pm' or mode == 'trace':
+            path_index = pm_count-1
             mocel_path = '../model/checkpoints/'+str(path_index)
             model.load(mocel_path)
             model.replace_params(params_pm.copy(), params_type='forward') 
             model.replace_params(params_value.copy(), params_type='value')     
 
             obs, obs_next, returns, dones, actions, values, advs_ori, rewards, fixed_state_f, pm_states, neglogpacs, epinfos = runner.run(model, int(nsteps), use_off_policy=use_off_policy, random_prob = 1) #pylint: disable=E06327
-        # elif mode == 'select':
-        #     load_index = np.random.randint(1, save_index, 1)[0] # randomly select a past policy to sample, for picking the best policy for new reward model
-        #     mocel_path = '../model/checkpoints/'+str(path_index)
-        #     model.load(mocel_path)
-        #     # increase_amount = np.random.rand()/2
-        #     # model.load_and_increase_logstd(mocel_path, increase_amount=increase_amount)  
-        #     model.replace_params(params_pm, params_type='forward') 
-        #     param_actor = model.get_current_params(params_type='actor')       
-        #     obs, obs_next, returns, dones, actions, values, advs_ori, rewards, fixed_state_f, pm_states, neglogpacs, epinfos = runner.run(model, int(nsteps), is_test=False, random_prob = 1) #pylint: disable=E06327
+        elif mode == 'select':
+            path_index = select_count-1
+            mocel_path = '../model/checkpoints/'+str(path_index)
+            model.load(mocel_path)
+            model.replace_params(params_pm.copy(), params_type='forward') 
+            model.replace_params(params_value.copy(), params_type='value')     
+
+            obs, obs_next, returns, dones, actions, values, advs_ori, rewards, fixed_state_f, pm_states, neglogpacs, epinfos = runner.run(model, int(nsteps*4), use_off_policy=use_off_policy, random_prob = 1) #pylint: disable=E06327
 
         print(mode, update, comm_rank, 'loading', mocel_path, save_index, rewards[:,-1].mean(), (rewards[:,-1]-rewards[:,0]-1).mean(), use_off_policy)
         # advs = advs_ori[:, -1] #+ advs_ori[:, 1]*2
@@ -176,16 +173,17 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
 
         if comm_rank == 0:
-            all_obs = np.asarray(obs_gather).reshape(nprocs*nsteps, -1)
-            all_obs_next = np.asarray(obs_next_gather).reshape(nprocs*nsteps, -1)
-            all_a = np.asarray(actions_gather).reshape(nprocs*nsteps, -1)
-            all_ret = np.asarray(returns_gather).reshape(nprocs*nsteps, -1)
-            all_adv = np.asarray(advs_gather).reshape(nprocs*nsteps, -1)
-            all_value = np.asarray(values_gather).reshape(nprocs*nsteps, -1)
-            all_reward = np.asarray(reward_gather).reshape(nprocs*nsteps, -1)
-            all_fsf = np.asarray(fixed_state_f_gather).reshape(nprocs*nsteps, -1)
-            # all_pm_state = np.asarray(pm_states_gather).reshape(nprocs*nsteps, -1)
-            all_neglogpacs = np.asarray(neglogpacs_gather).reshape(nprocs*nsteps)
+            length = len(obs)
+            all_obs = np.asarray(obs_gather).reshape(nprocs*length, -1)
+            all_obs_next = np.asarray(obs_next_gather).reshape(nprocs*length, -1)
+            all_a = np.asarray(actions_gather).reshape(nprocs*length, -1)
+            all_ret = np.asarray(returns_gather).reshape(nprocs*length, -1)
+            all_adv = np.asarray(advs_gather).reshape(nprocs*length, -1)
+            all_value = np.asarray(values_gather).reshape(nprocs*length, -1)
+            all_reward = np.asarray(reward_gather).reshape(nprocs*length, -1)
+            all_fsf = np.asarray(fixed_state_f_gather).reshape(nprocs*length, -1)
+            # all_pm_state = np.asarray(pm_states_gather).reshape(nprocs*length, -1)
+            all_neglogpacs = np.asarray(neglogpacs_gather).reshape(nprocs*length)
 
 
             print(all_obs.shape, all_a.shape, all_ret.shape, all_adv.shape, all_value.shape, all_reward.shape, all_fsf.shape, all_ret.shape, all_neglogpacs.shape)
@@ -197,71 +195,71 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
             print(update, mean_returns, mean_values, mean_rewards, mean_adv)
 
-            lr_p, cr_p = 0.0003, 0.1 
+            lr_p, cr_p = 0.0003, 0.2
 
-            print(mode)
+            print(mode, av_count, pm_count, select_count)
             if mode == 'av':
                 mocel_path = '../model/checkpoints/'+str(0)  
                 model.load(mocel_path)
                 print('restore to current net for updating', mocel_path)                        
                 print('in mode av, use_off_policy', use_off_policy) 
                 mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
-                                            all_obs, all_obs_next, all_ret, all_a, all_value, all_adv[:,-1], all_reward, all_fsf, all_neglogpacs,
+                                            all_obs, all_obs_next, all_ret, all_a, all_value, all_adv[:,0], all_reward[:,0], all_fsf, all_neglogpacs,
                                             lr_p, cr_p, model, update_type = 'av', use_off_policy=use_off_policy)                                                
                 display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
                                 all_reward, all_ret, all_value, all_adv, epinfos, model, logger) 
+                # nimibatch_update_pm(noptepochs, nbatch_train, [all_obs, all_a, all_obs_next, all_fsf], all_reward[:,-1], lr_p, model, update, 'trace')
+                
+                save_model(model, save_index)
+                save_count +=1
 
-
-                # if use_off_policy:
-                #     nimibatch_update_pm(3, 128, [all_obs, all_a, all_obs_next, all_fsf], all_reward, lr_p, model, update)
-
-                # save_index = int(save_count/save_interval)+1
-                # save_count +=1
-                # save_model(model, save_index)
                 save_model(model, 0)
 
                 params_value = model.get_current_params(params_type='value')
+                if av_count == av_update_num:
+                    mode = 'pm'
+                    pm_count = 0
 
-            elif mode == 'pm':
+            elif mode == 'pm' or mode == 'trace':
                 if obs_buffer == []:
                     obs_buffer, obs_next_buffer, action_buffer, fixed_f_buffer, reward_buffer = all_obs.copy(), all_obs_next.copy(), all_a.copy(), all_fsf.copy(), all_reward.copy()
+                    return_buffer = all_ret.copy()
                 else:
                     obs_buffer = np.concatenate((obs_buffer, all_obs.copy()), axis=0)
                     obs_next_buffer = np.concatenate((obs_next_buffer, all_obs_next.copy()), axis=0)
                     action_buffer = np.concatenate((action_buffer, all_a.copy()), axis=0)
                     fixed_f_buffer = np.concatenate((fixed_f_buffer, all_fsf.copy()), axis=0)
                     reward_buffer = np.concatenate((reward_buffer, all_reward.copy()), axis=0)
+                    return_buffer = np.concatenate((return_buffer, all_ret.copy()), axis=0)
 
-                if len(obs_buffer) > 300000:
-                    best_score = 0
-                    print('in mode pm', len(obs_buffer))
+                # if len(obs_buffer) > 300000:
+                if pm_count == save_index:
+                    print('in mode', mode, len(obs_buffer))
                     mocel_path = '../model/checkpoints/'+str(0)  
                     model.load(mocel_path)
                     print('restore to current net for updating', mocel_path)                
 
-                    for i in range(30):
-                        nimibatch_update_pm(1, 128, [obs_buffer, action_buffer, obs_next_buffer, fixed_f_buffer], reward_buffer, lr_p, model, update)
+                    use_max = False
+
+                    if mode == 'pm':
+                        # reward_in = reward_buffer[:,-1] #(reward_buffer[:,0]+1)*10
+                        iteration = 10
+                    else:     
+                        iteration = 30
+                    reward_in = return_buffer[:,-1]
+                    use_max = False
+                    for i in range(iteration):
+                        # if mode == 'trace' and i > 25:
+                        #     use_max = True 
+                    
+                        nimibatch_update_pm(1, 128, [obs_buffer, action_buffer, obs_next_buffer, fixed_f_buffer], reward_in, lr_p, model, update, mode, use_max=use_max)
                         save_model(model, '0')
-                        print('pm ', i)
-
-                    # for i in range(50):
-                    #     path_index = np.random.randint(1, save_index, 1)[0] # randomly select a past policy to sample, for picking the best policy for new reward model
-                    #     mocel_path = '../model/checkpoints/'+str(path_index)
-                    #     model.load(mocel_path)
-                    #     model.replace_params(params_pm.copy(), params_type='forward') 
-                    #     model.replace_params(params_value.copy(), params_type='value')     
-
-                    #     obs, obs_next, returns, dones, actions, values, advs_ori, rewards, fixed_state_f, pm_states, neglogpacs, epinfos = runner.run(model, int(nsteps), use_off_policy=use_off_policy, random_prob = 1) #pylint: disable=E06327
-                    #     print(rewards[:,-1].mean())
+                        print(mode, i)
                         
-                    # if pm_update_count == 0:
                     save_model(model, save_index)
-                    save_count +=1
-                    save_index = int(save_count/save_interval)+1
-
-                    # if pm_update_count < 5:
+                    # # if pm_update_count < 5:
                     print('reset to random policy')
-                    model.replace_params(params_value_rand.copy(), params_type='value') 
+                    # model.replace_params(params_value_rand.copy(), params_type='value') 
                     model.replace_params(params_act_rand.copy(), params_type='actor') 
 
                     params_value = model.get_current_params(params_type='value')
@@ -270,28 +268,46 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                     save_model(model, 0)
 
                     obs_buffer, obs_next_buffer, action_buffer, fixed_f_buffer = [], [], [], []
-                    # select_count = 5
-                    mode = 'av'
 
+                    if mode == 'pm':
+                        mode = 'trace'
+                        pm_count = 0
+                        # mode = 'select'
+                        # select_count = 0                        
+                    elif mode == 'trace':
+                        # mode = 'select'
+                        # select_count = 0
+                        mode = 'av'
+                        av_count = 0
+
+                    best_score = 0
+                    best_model = []
 
             elif mode == 'select':
                 print('in mode select')
-                best_mean_index = np.argmax(score_gather)
-                print('score list', score_gather, score_gather[best_mean_index], best_score, best_mean_index)
+                score = np.asarray(score_gather).mean()
+                # best_mean_index = np.argmax(score_gather)
+                # print('score list', score_gather, score_gather[best_mean_index], best_score, best_mean_index)
                 # policy_list.append(model_path_gather[best_mean_index])
-                print('policy list', policy_list)
-                if best_score < score_gather[best_mean_index]:
+                # print('policy list', policy_list)
+                print('best model', best_model, best_score)
+                if best_score < score:
                     # policy_list.append(best_mean_index)
-                    best_score = score_gather[best_mean_index]
-                    best_model = model_path_gather[best_mean_index]
+                    best_score = score
+                    best_model = model_path_gather[0]
                     model.load(best_model)  
                     # model.load_and_increase_logstd(best_model)  
                     model.replace_params(params_pm.copy(), params_type='forward') 
                     print('best model', best_model)
                     save_model(model, 0)
-                mode = 'av'
+                
+                if select_count == save_index:
+                    mode = 'av'
+                    av_count = 0
 
             print('\n') 
+            save_index = int(save_count/save_interval)
+
             # print('send',params_pm[0])        
 
             # if save_interval and (update % save_interval == 0 or update == 1 or update == nupdates) and logger.get_dir():
@@ -304,6 +320,10 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
         # params_all_base = comm.bcast(params_all_base, root=0)
         mode = comm.bcast(mode, root=0)
+        av_count = comm.bcast(av_count, root=0)
+        pm_count = comm.bcast(pm_count, root=0)
+        select_count = comm.bcast(select_count, root=0)
+
         save_index = comm.bcast(save_index, root=0)
         policy_list = comm.bcast(policy_list, root=0)
 

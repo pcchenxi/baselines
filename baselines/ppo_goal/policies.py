@@ -399,11 +399,6 @@ class MlpPolicy_Goal(object):
         A = tf.placeholder(tf.float32, ac_shape, name='action') #obs   train_model.pdtype.sample_placeholder([None])
 
         with tf.variable_scope(model_name, reuse=reuse):
-            # x_feature = self.create_obs_feature_net(X, is_training, reuse=False)
-            state = tf.concat([X, A, X_NEXT], axis=1)  
-            state_f = self.create_obs_feature_net(X_NEXT, is_training, units=[256,256,128], reuse=False)
-            x_next_feature = self.dense_layer(state_f, 128, None)
-
             with tf.variable_scope('actor', reuse=reuse):
                 h2_act = self.create_obs_feature_net(X, is_training, reuse=False)
                 pi = self.dense_layer(h2_act, actdim, None) #fc(h2_act, 'pi', actdim, init_scale=0.01)
@@ -411,23 +406,25 @@ class MlpPolicy_Goal(object):
                     initializer=tf.zeros_initializer())    
 
             with tf.variable_scope('value', reuse=reuse): 
-                h2_val = self.create_obs_feature_net(X, is_training, reuse=False)
-                vf_1 = self.dense_layer(h2_val, 1, None) #fc(h2_val, 'vf', REWARD_NUM-1)
-                vf_c = self.dense_layer(h2_val, 1, None) #fc(h2_val, 'vf', REWARD_NUM-1)
+                h1_val = self.create_obs_feature_net(X, is_training, reuse=False)
+                vf = self.dense_layer(h1_val, 1, None) #fc(h2_val, 'vf', REWARD_NUM-1)
 
-                vf = tf.concat([vf_1, vf_c], axis=1)      
+                # vf = tf.concat([vf_1, vf_c, vf_er], axis=1)   
 
             with tf.variable_scope('forward_dynamic', reuse=reuse):   
                 # x_next_feature = X_NEXT 
                 with tf.variable_scope('fixed_state_feature', reuse=reuse):   
-                    state = tf.concat([X, A, X_NEXT], axis=1)  
-                    state_f = self.create_obs_feature_net(X_NEXT, is_training, units=[256,256,128], reuse=False)
-                    x_next_feature = self.dense_layer(state_f, 128, None)
+                    state = tf.concat([X, X_NEXT], axis=1)  
+                    state_f = self.create_obs_feature_net(state, is_training, units=[128,128,64], reuse=False)
+                    x_next_feature = self.dense_layer(state_f, 64, None)
                 with tf.variable_scope('pred_state_feature', reuse=reuse):   
-                    state_action_state = tf.concat([X, A, X_NEXT], axis=1)     
-                    h2_fd = self.create_obs_feature_net(state_action_state, is_training, units=[256, 256, 128], reuse=False, use_bn = False)
+                    state_action_state = tf.concat([X, X_NEXT], axis=1)     
+                    h2_fd = self.create_obs_feature_net(state_action_state, is_training, units=[128, 64, 64], reuse=False, use_bn = False)
                     # x_next_feature_pred = self.dense_layer(h2_fd, 32, 'next_state_f', None) #fc(h2_fd, 'next_state_f', 32)
-                    x_next_feature_pred = self.dense_layer(h2_fd, 128, None)
+                    x_next_feature_pred = self.dense_layer(h2_fd, 64, None)
+                with tf.variable_scope('expected_ir', reuse=reuse):   
+                    h_eir = self.create_obs_feature_net(X, is_training, units=[128, 64, 64], reuse=False, use_bn = False)
+                    self.expected_ir = self.dense_layer(h_eir, 1, None)
 
         pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
 
@@ -442,16 +439,20 @@ class MlpPolicy_Goal(object):
         p_error = tf.sqrt(tf.reduce_sum(tf.square(x_next_feature_pred - x_next_feature), 1))
 
         def step(ob, *_args, **_kwargs):
-            a, v, neglogp = sess.run([a0, vf, neglogp0], {X:ob})
+            a, v, e_ir, neglogp = sess.run([a0, vf, self.expected_ir, neglogp0], {X:ob})
             a = np.clip(a, -2, 2)
+            v = np.concatenate((v, e_ir), axis=1)
             return a, v, neglogp
 
         def value(ob, *_args, **_kwargs):
-            return sess.run(vf, {X:ob})
+            v, e_ir = sess.run([vf, self.expected_ir], {X:ob})
+            return np.concatenate((v, e_ir), axis=1)
 
         def step_max(ob, *_args, **_kwargs):
-            a, v, neglogp = sess.run([a1, vf, neglogp0], {X:ob})
+            a, v, e_ir, neglogp = sess.run([a1, vf, self.expected_ir, neglogp0], {X:ob})
             a = np.clip(a, -2, 2)
+            v = np.concatenate((v, e_ir), axis=1)
+
             return a, v, neglogp
 
         def get_state_action_prediction(ob, a, ob_, *_args, **_kwargs):
@@ -463,6 +464,8 @@ class MlpPolicy_Goal(object):
         def get_pred_error(ob, a, ob_, *_args, **_kwargs):
             return sess.run(p_error, {X:ob, A:a, X_NEXT:ob_})
 
+        def get_expected_ir(ob, *_args, **_kwargs):
+            return sess.run(self.expected_ir, {X:ob})
 
         self.X = X
         self.X_NEXT = X_NEXT
@@ -483,3 +486,4 @@ class MlpPolicy_Goal(object):
         self.state_action_pred = get_state_action_prediction
         self.state_feature = get_state_feature
         self.pred_error = get_pred_error
+        self.get_expected_ir = get_expected_ir
