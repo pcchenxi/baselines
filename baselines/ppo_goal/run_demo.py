@@ -178,7 +178,7 @@ def run_test():
 
     # print(env.get_sim_data())
 
-    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.99, lam=0.98, buffer_length = 10)
+    runner = Runner(env=env, model=model, nsteps=4096, gamma=0.98, lam=0.98, buffer_length = 10)
     runner.gamma_list = [0]
     nbatch_train = 128
     nbatch = 50
@@ -210,16 +210,19 @@ def run_test():
         print(i)
 
         try:
+            index = int(i/5) + 1
             mocel_path = '/home/xi/workspace/model/checkpoints/'+str(0)
             model.load(mocel_path)
             # model.replace_params(params_pm, params_type='forward') 
             # model.replace_params(params_value, params_type='value') 
 
             obs, obs_next, returns, dones, actions, values, advs_ori, fixed_f, rewards, _, neglogpacs, epinfos = \
-                runner.run(model, int(nbatch), is_test=True, render=True, random_prob=1, use_off_policy=False) #pylint: disable=E0632
+                runner.run(model, int(nbatch), is_test=True, render=True, random_prob=1) #pylint: disable=E0632
             # mblossvals = nimibatch_update(  nbatch, noptepochs, nbatch_train,
             #                                         obs, obs_next, returns, actions, values, advs_ori[:,-1], neglogpacs,
             #                                         lr_p, cr_p, nbatch, model, update_type = 'all')   
+            print(mocel_path)
+
         except:
             time.sleep(1)
             continue

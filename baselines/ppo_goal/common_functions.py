@@ -63,8 +63,8 @@ class Model(object):
         pg_losses2 = -ADV * tf.clip_by_value(ratio, 1.0 - CLIPRANGE, 1.0 + CLIPRANGE)
         pg_losses3 = tf.maximum(pg_losses, pg_losses2)
 
-        # adv_mean, adv_std = tf.nn.moments(pg_losses3, [0])
-        # pg_loss_normalized = (pg_losses3 - adv_mean)/adv_std
+        # pg_mean, pg_var = tf.nn.moments(pg_losses3, [0])
+        # pg_loss_normalized = (pg_losses3 - pg_mean)/tf.sqrt(pg_var)
         # pg_loss = tf.reduce_mean(pg_loss_normalized)
 
         pg_loss = tf.reduce_mean(pg_losses3)
@@ -76,9 +76,9 @@ class Model(object):
         vpred = train_model.vf
         vpredclipped = OLDVPRED + tf.clip_by_value(train_model.vf - OLDVPRED, - CLIPRANGE, CLIPRANGE)
         vf_losses1 = tf.square(vpred - RETRUN)
-        # vf_losses2 = tf.square(vpredclipped - RETRUN)
-        # vf_loss = tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
-        vf_loss = tf.reduce_mean(vf_losses1)
+        vf_losses2 = tf.square(vpredclipped - RETRUN)
+        vf_loss = tf.reduce_mean(tf.maximum(vf_losses1, vf_losses2))
+        # vf_loss = tf.reduce_mean(vf_losses1)
 
         # pg_loss1_off = -ADV * tf.clip_by_value(ratio, 0, 10)
         # adv_mean_off, adv_std_off = tf.nn.moments(pg_loss1_off, [0])
@@ -181,17 +181,13 @@ class Model(object):
                         td_map                
                     )[:-3]
             if train_type == 'av':             
-                # if use_off_policy:
-                #     # r, lv, lvoff, la_off = sess.run([ratio, vf_losses1, vf_losses1_off, loss_a_off], td_map)
-                #     # print(la_off)
-                #     # for rs, las, laoffs in zip(r, la, laoff):
-                #     #     print(rs, las, laoffs)
-                #     print('off')
-                #     return sess.run(
-                #         [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a_off, train_v_off],
-                #         td_map                
-                #     )[:-2]             
-                # else:
+                # mean, std = sess.run([adv_mean, adv_std], td_map)
+                # pgl3, pg = sess.run([pg_losses3, pg_loss_normalized], td_map)
+                # pgl4 = (pgl3 - pgl3.mean()) / (pgl3.std())
+                # for p3, p, p4 in zip(pgl3, pg, pgl4):
+                #     print(p3, p, p4)
+                # print(mean, std, pgl3.mean(), pgl3.var())
+
                 return sess.run(
                     [pg_loss, loss_v, loss_forward, entropy, approxkl, clipfrac, _grad_norm_a, train_a, train_v],
                     td_map                
@@ -204,6 +200,8 @@ class Model(object):
 
 
         def train_pm(lr, obs, a, obs_, fixed_state_f, rewards, train_type):
+            # print(obs.shape)
+
             td_map = {train_model.is_training: True, train_model.X:obs, train_model.A:a, train_model.X_NEXT:obs_, STATE_F:fixed_state_f, REWARD:rewards.reshape(-1,1), LR:lr}
             if train_type == 'pm':
                 return sess.run([loss_forward, train_forward], td_map)[:-1]
@@ -211,7 +209,7 @@ class Model(object):
                 return sess.run([loss_eir, train_ir], td_map)[:-1]
 
         def get_neglogpac(obs, actions):
-            return sess.run(neglogpac, {train_model.X:obs, A:actions})
+            return sess.run(neglogpac, {train_model.X:obs, train_model.A:actions})
 
         def get_actions_dist(obs):
             return sess.run([train_model.mean, train_model.std], {train_model.X:obs})
@@ -374,25 +372,17 @@ class Runner(object):
 
         self.full_obs = self.env.reset()
 
-    def compute_intrinsic_reward(self, obs, a, obs_):
-        # # object_related_index = [3,4,5,11,12,13,14,15,16,17,18,19]
-        # next_statef = self.model.state_feature([obs], [a], [obs_])
-        # next_statef_pred = self.model.state_action_pred([obs], [a], [obs_])
+    def pm_activate(self, pm, scale):
+        pm_scaled = pm/scale
+        pm_act = np.expm1(pm_scaled)/5
+        return np.clip(pm_act, 0, 1)
 
-        # diff_f = (next_statef_pred - next_statef) #np.take((next_statef_pred - next_statef), object_related_index)
-        # diff_f_norm = np.sqrt(np.sum(diff_f*diff_f))
+
+    def compute_intrinsic_reward(self, obs, a, obs_):
         return self.model.pred_error([obs], [a], [obs_])[0]
 
-        # obs_list = np.full((self.history_buff_length, len(obs_)), obs_)
-        # a_list = np.full((self.history_buff_length, len(a)), a)
-        # start_states = np.asarray(self.history_states)
 
-        # reward_list = self.model.pred_error(start_states, a_list, obs_list)
-        # # print(reward_list)
-        # return reward_list.mean()
-
-
-    def run(self, model, nsteps, is_test = False, use_deterministic = False, render = False, random_prob = 0.5, use_off_policy=False):
+    def run(self, model, nsteps, pm_cut, pm_scale, is_test = False, use_deterministic = False, render = False, random_prob = 0.5):
         self.model = model
 
         mb_obs, mb_obs_next, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs, mb_boost = [],[],[],[],[],[],[],[]
@@ -410,6 +400,7 @@ class Runner(object):
             else:
                 actions, values, neglogpacs = self.model.step([obs], self.dones)
 
+            neglogpacs = self.model.get_neglogpac([obs], actions)
             # print(actions)
             self.full_obs = full_obs.copy()
             mb_obs.append(obs.copy())
@@ -445,52 +436,35 @@ class Runner(object):
                 else:
                     v_preds = self.model.value([obs])[0]
 
-                mb_boost[-1] = (self.gamma*v_preds)
+                mb_boost[-1][0] = (self.gamma*v_preds)[0]
+                # mb_boost[-1] = (self.gamma*v_preds)
 
                 full_obs = self.env.reset()   
                 obs = np.concatenate((full_obs['observation'], full_obs['desired_goal']), axis=0) 
                 self.full_obs = full_obs.copy()
-
-            # r_pm = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
-            # if r == 0:
-            #     r_pm_true = 1
-            # else:
-            #     r_pm_true = 0 #np.minimum(r_pm, 1)
-
-            # r_pm_true = np.minimum(r_pm, 1)
-
-            # print(r_pm_true)
-            # if step_count > 0:        
-            #     start = len(mb_rewards) - step_count
-            #     for i in range(start, len(mb_rewards), 1):
-            #         p = len(mb_rewards) - i -1
-            #         scale = np.power(0.9, p)
-            #         print(r_pm_true*scale, mb_rewards[i][1], mb_rewards[i][-1])
-            #         if r_pm_true > mb_rewards[i][1]:
-            #             mb_rewards[i][-1] = r_pm_true*scale
-            #         # mb_rewards[i][-1] = np.maximum(r_pm_true*scale, mb_rewards[i][-1])
-            #         print(mb_rewards[i][-1])
-            #         mb_rewards[i][-2] = np.maximum(mb_rewards[i][-2], mb_rewards[i][-1])
-            #     print()
             
+            r_ext = (r+1)*1
             r_pm = self.compute_intrinsic_reward(mb_obs[-1], mb_actions[-1], mb_obs_next[-1])
-            r_potental = self.model.value([mb_obs_next[-1]])[0][-1] - values[0][-1]*self.gamma[0]
-            scale = 1 - r_pm/0.5
-            scale = np.clip(scale, 0, 1)
-            r_ints = r_pm + r_potental*scale*4 + (r+1)*1
+            r_pm_act = self.pm_activate(r_pm, pm_scale) + r_ext
+            r_pm_crop = np.maximum(0, r_pm_act - pm_cut)
 
-            rewards = np.array([r_ints, r_pm+(r+1)*1])
+            r_potental = self.model.value([mb_obs_next[-1]])[0][-1] - values[0][-1]
+
+            r_ints = r_pm_act + r_potental*1 
+
+            rewards = np.array([r_ints, r_pm_crop])
 
             # rewards[1] = r_pm + r +1 #self.model.get_self_reward([obs])[0]
             mb_rewards.append(rewards)
-            batch_rew.append([r, r_pm, r_potental, scale])
+            batch_rew.append([r, r_pm, r_pm_act, r_potental])
 
             step_count += 1
 
             if self.dones:
                 step_count = 0
-                if is_test:
-                    break
+
+            if is_test and (step_count > 50 or self.dones):
+                break
         #batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_obs_next = np.asarray(mb_obs_next, dtype=self.obs.dtype)
@@ -531,9 +505,13 @@ class Runner(object):
             print(self.gamma, self.lam)
             with np.printoptions(precision=3, suppress=True):
                 for i in range(len(mb_values)):
-                    print(batch_rew[i], mb_rewards[i], mb_returns[i], mb_advs[i][0], mb_values[i])
+                    print(batch_rew[i], np.asarray(mb_rewards[i]), np.asarray(mb_returns[i]), mb_advs[i][0], mb_values[i])
 
-        # print(comm_rank, use_off_policy, self.lam, mb_rewards[:,1].mean())
+            print(self.pm_cut, self.pm_scale)
+        
+        # for ret, rew in zip(mb_returns, mb_rewards):
+        #     print(ret, rew)
+        mb_rewards = np.concatenate((batch_rew[:,0].reshape(-1, 1), mb_rewards), axis=1)
         return (mb_obs, mb_obs_next, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_fixed_state_f, mb_pm_state, mb_neglogpacs, epinfos)
         # return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_advs, mb_rewards, mb_neglogpacs)),
         #     epinfos, ret)
@@ -567,15 +545,11 @@ def display_updated_result( lossvals, update, log_interval, nsteps, nbatch,
         step_label = update
         for i in range(2):
             model.write_summary('return/mean_ret_'+str(i+1), np.mean(returns[:,i]), step_label)
-            model.write_summary('reward/mean_rew_'+str(i+1), np.mean(rewards[:,i]), step_label)
             # model.write_summary('sum_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i] for epinfo in epinfobuf]), step_label)
-            # model.write_summary('mean_rewards/rewards_'+str(i+1), safemean([epinfo['r'][i]/epinfo['l'] for epinfo in epinfobuf]), step_label)\
             # model.log_histogram('return_dist/return_'+str(i+1), returns[:,i], step_label)
-            # model.log_histogram('adv_dist/adv_'+str(i+1), advs_ori[:,i], step_label)
-            # model.log_histogram('values_dist/adv_'+str(i+1), values[:,i], step_label)
+        for i in range(3):
+            model.write_summary('reward/mean_rew_'+str(i+1), np.mean(rewards[:,i]), step_label)
             
-            # model.write_summary('mean_advs/adv_'+str(i+1), np.mean(advs_ori[:,i]), step_label)
-            # model.write_summary('adv_std/adv_'+str(i+1), advs_ori[:,i].std(), step_label)
             
         model.write_summary('sum_rewards/score', safemean([epinfo['r'][-1] for epinfo in epinfobuf]), step_label)
         model.write_summary('sum_rewards/mean_length', safemean([epinfo['l'] for epinfo in epinfobuf]), step_label)
@@ -598,6 +572,8 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
         np.random.shuffle(inds)
         for start in range(0, len(obs), nbatch_train):
             end = start + nbatch_train
+            if end >= len(obs):
+                break
             mbinds = inds[start:end]
             slices = (arr[mbinds] for arr in (obs, obs_next, returns[:,0], actions, values[:,0], advs, rewards, fixed_state_f, neglogpacs))
 
@@ -608,7 +584,7 @@ def nimibatch_update(   nbatch, noptepochs, nbatch_train,
     lossvals = np.mean(mblossvals, axis=0)
     return lossvals
 
-def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, rewards, lrnow, model, update, mode, use_max = False):
+def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, rewards, lrnow, model, update, mode):
     mblossvals = []
     nbatch_train = int(nbatch_train)
 
@@ -619,15 +595,22 @@ def nimibatch_update_pm(noptepochs, nbatch_train, pm_states, rewards, lrnow, mod
     fixed_state_f = pm_states[3]
     # rewards = rewards[:,0]
 
-    if mode == 'trace' and use_max:
-        current_eir = model.get_expected_ir(obs)[0]
-        rewards = np.maximum(rewards, current_eir)
+    if mode == 'pm':
+        inds = np.random.choice(len(obs), 30000)
+    else:
+        # prob = rewards - rewards.min()
+        prob = rewards/rewards.sum()
+        # print(prob)
+        inds = np.random.choice(len(obs), 30000, p=rewards/rewards.sum())
 
-    inds = np.arange(len(obs))
     for ep in range(noptepochs):
         np.random.shuffle(inds)
-        for start in range(0, len(obs), nbatch_train):
+        # for start in range(0, len(obs), nbatch_train):
+        for start in range(0, len(inds), nbatch_train):
             end = start + nbatch_train
+            if end >= len(obs):
+                break
+
             mbinds = inds[start:end]
             slices = (arr[mbinds] for arr in (obs, a, obs_, fixed_state_f, rewards))
 

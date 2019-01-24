@@ -415,16 +415,17 @@ class MlpPolicy_Goal(object):
                 # x_next_feature = X_NEXT 
                 with tf.variable_scope('fixed_state_feature', reuse=reuse):   
                     state = tf.concat([X, X_NEXT], axis=1)  
-                    state_f = self.create_obs_feature_net(state, is_training, units=[128,128,64], reuse=False)
+                    state_f = self.create_obs_feature_net(X, is_training, units=[128,128,64], reuse=False)
                     x_next_feature = self.dense_layer(state_f, 64, None)
                 with tf.variable_scope('pred_state_feature', reuse=reuse):   
                     state_action_state = tf.concat([X, X_NEXT], axis=1)     
-                    h2_fd = self.create_obs_feature_net(state_action_state, is_training, units=[128, 64, 64], reuse=False, use_bn = False)
+                    h2_fd = self.create_obs_feature_net(X, is_training, units=[128, 64, 64], reuse=False, use_bn = False)
                     # x_next_feature_pred = self.dense_layer(h2_fd, 32, 'next_state_f', None) #fc(h2_fd, 'next_state_f', 32)
                     x_next_feature_pred = self.dense_layer(h2_fd, 64, None)
                 with tf.variable_scope('expected_ir', reuse=reuse):   
                     h_eir = self.create_obs_feature_net(X, is_training, units=[128, 64, 64], reuse=False, use_bn = False)
                     self.expected_ir = self.dense_layer(h_eir, 1, None)
+                    expected_ir_clip = tf.clip_by_value(self.expected_ir, 0, 100000)
 
         pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
 
@@ -439,17 +440,17 @@ class MlpPolicy_Goal(object):
         p_error = tf.sqrt(tf.reduce_sum(tf.square(x_next_feature_pred - x_next_feature), 1))
 
         def step(ob, *_args, **_kwargs):
-            a, v, e_ir, neglogp = sess.run([a0, vf, self.expected_ir, neglogp0], {X:ob})
+            a, v, e_ir, neglogp = sess.run([a0, vf, expected_ir_clip, neglogp0], {X:ob})
             a = np.clip(a, -2, 2)
             v = np.concatenate((v, e_ir), axis=1)
             return a, v, neglogp
 
         def value(ob, *_args, **_kwargs):
-            v, e_ir = sess.run([vf, self.expected_ir], {X:ob})
+            v, e_ir = sess.run([vf, expected_ir_clip], {X:ob})
             return np.concatenate((v, e_ir), axis=1)
 
         def step_max(ob, *_args, **_kwargs):
-            a, v, e_ir, neglogp = sess.run([a1, vf, self.expected_ir, neglogp0], {X:ob})
+            a, v, e_ir, neglogp = sess.run([a1, vf, expected_ir_clip, neglogp0], {X:ob})
             a = np.clip(a, -2, 2)
             v = np.concatenate((v, e_ir), axis=1)
 
@@ -465,7 +466,7 @@ class MlpPolicy_Goal(object):
             return sess.run(p_error, {X:ob, A:a, X_NEXT:ob_})
 
         def get_expected_ir(ob, *_args, **_kwargs):
-            return sess.run(self.expected_ir, {X:ob})
+            return sess.run(expected_ir_clip, {X:ob})
 
         self.X = X
         self.X_NEXT = X_NEXT
