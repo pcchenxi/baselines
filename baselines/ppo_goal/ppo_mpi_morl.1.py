@@ -19,44 +19,27 @@ nprocs = comm.Get_size()
 
 def recompute_returns_rp(obs, obs_next, actions, dones, reward_ext, pm_cut, pm_scale, boost, model, runner):
 
-    mb_returns = np.zeros_like(reward_ext)
+    mb_returns = np.zeros_like(mb_rewards)
 
-    reward_ext_act = runner.r_ext_activate(reward_ext)
     r_pm_traces = model.pred_error(obs, actions, obs_next)
-    r_pm_traces_act = runner.pm_activate(r_pm_traces, pm_cut, pm_scale) + reward_ext_act
+    r_pm_traces_act = runner.pm_activate(r_pm_traces, pm_cut, pm_scale) + reward_ext
     values_next = model.get_expected_ir(obs_next).reshape(-1)
 
-    for i in range(len(dones)-1, -1, -1):
+    for i in range(len(dones)):
         r_pm_trace = r_pm_traces_act[i]
         r_p_obs_next = values_next[i]
-        r_current = r_pm_trace + boost*r_p_obs_next
+        for j in range(j, -1, -1):
+            steps = i - j
+            trace_ret = np.power(0.99, steps) * (r_pm_trace + boost*r_p_obs_next)
+            # print(r_pm_trace, steps, np.power(0.99, steps), trace_ret)
+            if trace_ret > mb_returns[j]:
+                mb_returns[j] = trace_ret
 
-        if i == len(dones)-1:
-            r_max = r_current 
-        elif dones[i+1]:
-            r_max = r_current
+            if dones[j]:
+                break
 
-        if r_max > r_current:
-            mb_returns[i] = r_max 
-        else:
-            mb_returns[i] = r_current 
-            r_max = r_current 
-        
-        r_max *= 0.9
-
-        # for j in range(i, -1, -1):
-        #     steps = i - j
-        #     trace_ret = np.power(0.99, steps) * (r_pm_trace + boost*r_p_obs_next)
-        #     # print(r_pm_trace, steps, np.power(0.99, steps), trace_ret)
-        #     if trace_ret > mb_returns[j]:
-        #         mb_returns[j] = trace_ret
-
-        #     if dones[j]:
-        #         print(i, steps)
-        #         break
-
-    # for r_act, ret, done in zip(r_pm_traces, mb_returns, dones):
-    #     print(r_act, ret, done)
+    for r_act, ret, done in zip(r_pm_trace, mb_returns, dones):
+        print(r_act, ret, done)
 
     return mb_returns
 
@@ -143,8 +126,6 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
     pm_buffer_rew = []
     pm_buffer_dones = []
 
-    lr_p, cr_p = 0.005, 0.2
-
     for update in range(start_update+1, nupdates+1):
 
         # if save_index%20 == 0:
@@ -219,7 +200,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             print(all_obs.shape, all_a.shape, all_ret.shape, all_adv.shape, all_value.shape, all_reward.shape, all_fsf.shape, all_ret.shape, all_neglogpacs.shape)
 
             advs = all_adv[:,0]
-            # advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
+            advs = (advs - advs.mean()) / (advs.std() + 1e-8)                
 
             mean_returns = np.mean(all_ret, axis = 0)
             mean_values = np.mean(all_value, axis = 0)
@@ -229,8 +210,7 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
             print(update, mean_returns, mean_values, mean_rewards)
             print(advs.mean(), advs.std(), advs.min(), advs.max())
 
-            # lr_p, cr_p = 0.005*(1 - av_count*0.0002), 0.2
-            # lr_p = np.clip(lr_p, 0.00001, 0.005)
+            lr_p, cr_p = 0.0003, 0.2
 
             print(mode, av_count, pm_count)
             mocel_path = '../model/checkpoints/'+str(0)  
@@ -243,18 +223,12 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
                                             all_obs, all_obs_next, all_ret, all_a, all_value, all_adv[:,0], all_reward[:,0], all_fsf, all_neglogpacs,
                                             lr_p, cr_p, model, update_type = 'av')   
 
-                print(lr_p, mblossvals[-1])
-                # if mblossvals[-1] > 1:
-                #     lr_p *= 0.9
-                lr_p, cr_p = 0.0005*(1 - av_count*0.00001), 0.2
-                lr_p = np.clip(lr_p, 0.00001, 0.005)
-
                 display_updated_result( mblossvals, update, log_interval, nsteps, nbatch, 
                                 all_reward, all_ret, all_value, all_adv, epinfos, model, logger) 
                 
                 # save_count +=1
                 add = False
-                if mblossvals[3] < 1 or mblossvals[-1] > 10:
+                if mblossvals[3] < 3.5:
                     save_index += 1
                     save_count = save_index*save_interval
                     av_count = av_update_num
@@ -320,38 +294,62 @@ def learn(*, policy, env, nsteps, total_timesteps, ent_coef, lr,
 
                 # new_pm_error_act = runner.pm_activate(new_pm_error, 0, error_max)
                 # new_pm_error_with_rext = new_pm_error + pm_buffer_rew[:,0] +1
-                error_max = np.percentile(new_pm_error, 99) #new_pm_error.max()
+                error_max = new_pm_error.max() #np.percentile(new_pm_error, 98) #new_pm_error.max()
 
                 pm_mean = new_pm_error.mean()
 
-                pm_cut = 0 #np.percentile(new_pm_error, 70)
+                pm_cut = np.percentile(new_pm_error, 70)
                 pm_scale = error_max
-                np.save('/home/xi/workspace/model/checkpoints/pm_norm.npy', np.array([pm_cut, pm_scale]))
+                recompute_returns_rp(pm_buffer_obs, pm_buffer_obs_next, pm_buffer_a, pm_buffer_dones, pm_buffer_rew[:,0], pm_cut, pm_scale, 0, model, runner)
 
-                for i in range(50):
-                    # if i < 20:
-                    #     boost = 0
-                    # else:
-                    boost = 0.9
+                # if obs_buffer == []:
+                #     obs_buffer, obs_next_buffer, action_buffer, fixed_f_buffer, reward_buffer = all_obs.copy(), all_obs_next.copy(), all_a.copy(), all_fsf.copy(), all_reward.copy()
+                #     return_buffer = all_ret.copy()
+                #     values_buffer = all_value.copy()
+                # else:
+                #     obs_buffer = np.concatenate((obs_buffer, all_obs.copy()), axis=0)
+                #     obs_next_buffer = np.concatenate((obs_next_buffer, all_obs_next.copy()), axis=0)
+                #     action_buffer = np.concatenate((action_buffer, all_a.copy()), axis=0)
+                #     fixed_f_buffer = np.concatenate((fixed_f_buffer, all_fsf.copy()), axis=0)
+                #     reward_buffer = np.concatenate((reward_buffer, all_reward.copy()), axis=0)
+                #     return_buffer = np.concatenate((return_buffer, all_ret.copy()), axis=0)
+                #     values_buffer = np.concatenate((values_buffer, all_value.copy()), axis=0)
 
-                    returns = recompute_returns_rp(pm_buffer_obs, pm_buffer_obs_next, pm_buffer_a, pm_buffer_dones, pm_buffer_rew[:,0], pm_cut, pm_scale, boost, model, runner)
-                    loss_trace = nimibatch_update_pm(2, 128, [pm_buffer_obs, pm_buffer_a, pm_buffer_obs_next, pm_buffer_fst], returns, lr_p, model, update, mode)
-                    save_model(model, '0')
+                # if pm_count == 1:
+                #     new_pm_error = model.pred_error(pm_buffer_obs, pm_buffer_a, pm_buffer_obs_next)
+                #     # error_max = np.percentile(new_pm_error, 98) #new_pm_error.max()
+
+                #     # new_pm_error_act = runner.pm_activate(new_pm_error, 0, error_max)
+                #     # new_pm_error_with_rext = new_pm_error + pm_buffer_rew[:,0] +1
+                #     error_max = new_pm_error.max() #np.percentile(new_pm_error, 98) #new_pm_error.max()
+
+                #     pm_mean = new_pm_error.mean()
+
+                #     pm_cut = np.percentile(new_pm_error, 70)
+                #     pm_scale = error_max
                     
-                    print(mode, i, loss_trace)
+                #     print('new pm error, mean_with_rext:', pm_mean, 'error max:', error_max, 'cut:', pm_cut)
+                #     np.save('/home/xi/workspace/model/checkpoints/pm_norm', np.array([pm_cut, pm_scale]))
+                                        
+
+                # if pm_count % save_index == 0:         
+                #     for i in range(50):
+                #         loss_trace = nimibatch_update_pm(2, 128, [obs_buffer, action_buffer, obs_next_buffer, fixed_f_buffer], return_buffer[:,-1], lr_p, model, update, mode)
+                #         save_model(model, '0')
+                #         print(mode, i, loss_trace)
 
                         
-                save_model(model, save_index)
-                # # if pm_update_count < 5:
-                print('reset to random policy')
-                model.replace_params(params_value_rand.copy(), params_type='value') 
-                model.replace_params(params_act_rand.copy(), params_type='actor') 
+                #     save_model(model, save_index)
+                #     # # if pm_update_count < 5:
+                #     print('reset to random policy')
+                #     model.replace_params(params_value_rand.copy(), params_type='value') 
+                #     model.replace_params(params_act_rand.copy(), params_type='actor') 
 
-                # obs_buffer, obs_next_buffer, action_buffer, fixed_f_buffer = [], [], [], []
+                #     obs_buffer, obs_next_buffer, action_buffer, fixed_f_buffer = [], [], [], []
 
-                mode = 'av'
-                av_count = 0
-                
+                #     if pm_count == save_index*1:
+                #         mode = 'av'
+                #         av_count = 0
 
             params_value = model.get_current_params(params_type='value')
             params_pm = model.get_current_params(params_type='forward')

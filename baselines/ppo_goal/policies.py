@@ -176,10 +176,10 @@ class MlpPolicy(object):
             with tf.variable_scope('value', reuse=reuse):        
                 h1_val = self.dense_layer_bn(X, 128, 'vf_fc1', tf.nn.relu, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
                 h2_val = self.dense_layer_bn(h1_val, 64, 'vf_fc2', tf.nn.relu, is_training) #activ(fc(h1_val, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
-                vf_1 = self.dense_layer(h2_val, REWARD_NUM-1, 'vf', None) #fc(h2_val, 'vf', REWARD_NUM-1)
-                vf_ri = self.dense_layer(h2_val, 1, 'vf_ri', None) #fc(h2_val, 'vf_ri', 1)
+                vf = self.dense_layer(h2_val, 1, 'vf', None) #fc(h2_val, 'vf', REWARD_NUM-1)
+                # vf_ri = self.dense_layer(h2_val, 1, 'vf_ri', None) #fc(h2_val, 'vf_ri', 1)
 
-                vf = tf.concat([vf_1, vf_ri], axis=1)      
+                # vf = tf.concat([vf_1, vf_ri], axis=1)      
 
             with tf.variable_scope('inverse_dynamic', reuse=reuse): 
                 x_feature = self.create_obs_feature_net(X, is_training, reuse=False)
@@ -276,89 +276,6 @@ class MlpPolicy(object):
 
 activ = tf.nn.relu
 class MlpPolicy_Goal(object):
-    def create_obs_feature_net(self, obs, is_training, reuse=False):
-        with tf.variable_scope('obs_feature', reuse=reuse):    
-            h1_obsf = self.dense_layer_bn(obs, 64, 'obs_f_h1', tf.nn.relu, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
-            h2_obsf = self.dense_layer_bn(h1_obsf, 32, 'obs_f_h2', tf.nn.relu, is_training) #activ(fc(h1_val, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
-        return h2_obsf
-
-    def dense_layer(self, input_s, output_size, name, activation):
-        out = tf.layers.dense(input_s, output_size, activation, name=name)
-        return out
-
-    def dense_layer_bn(self, input_s, output_size, name, activation, training):
-        out = tf.layers.dense(input_s, output_size, name=name)
-        # out = tf.layers.batch_normalization(out, name=name+'_bn', training=training)
-        out = activation(out)
-        return out
-
-    def __init__(self, sess, ob_space, ac_space, goal_space, REWARD_NUM, reuse=False, model_name="model"):
-        # with tf.device('/device:GPU:0'):
-        ob_shape = [None, ob_space.shape[0]+goal_space.shape[0]]
-        ac_shape = (None,) + ac_space.shape
-
-        print('ob_space.shape', ob_shape)
-
-        actdim = ac_space.shape[0]
-        is_training = tf.placeholder_with_default(False, shape=(), name='training')
-
-        X = tf.placeholder(tf.float32, ob_shape, name='Ob') #obs
-        # REWARD = tf.placeholder(tf.float32, [None, REWARD_NUM-1], name='ph_Rew')
-
-        A = tf.placeholder(tf.float32, ac_shape, name='action') #obs   train_model.pdtype.sample_placeholder([None])
-        
-        with tf.variable_scope(model_name, reuse=reuse):
-            with tf.variable_scope('actor', reuse=reuse):
-                h1_act = self.dense_layer_bn(X, 128, 'pi_fc1', tf.nn.relu, is_training)  #activ(fc(X, 'pi_fc1', nh=256, init_scale=np.sqrt(2)))
-                h2_act = self.dense_layer_bn(h1_act, 64, 'pi_fc2', tf.nn.relu, is_training) #activ(fc(h1_act, 'pi_fc2', nh=128, init_scale=np.sqrt(2)))
-                pi = self.dense_layer(h2_act, actdim, 'pi', None) #fc(h2_act, 'pi', actdim, init_scale=0.01)
-                logstd = tf.get_variable(name="logstd", shape=[1, actdim],
-                    initializer=tf.zeros_initializer())    
-
-            with tf.variable_scope('value', reuse=reuse):        
-                h1_val = self.dense_layer_bn(X, 128, 'vf_fc1', tf.nn.relu, is_training) #activ(fc(X, 'vf_fc1', nh=128, init_scale=np.sqrt(2)))
-                h2_val = self.dense_layer_bn(h1_val, 64, 'vf_fc2', tf.nn.relu, is_training) #activ(fc(h1_val, 'vf_fc2', nh=64, init_scale=np.sqrt(2)))
-                vf_1 = self.dense_layer(h2_val, 1, 'vf', None) #fc(h2_val, 'vf', REWARD_NUM-1)
-                # vf_ri = self.dense_layer(h2_val, 1, 'vf_ri', None) #fc(h2_val, 'vf_ri', 1)
-
-                vf = vf_1 #tf.concat([vf_1, vf_ri], axis=1)      
-
-        pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
-
-        self.pdtype = make_pdtype(ac_space)
-        self.pd = self.pdtype.pdfromflat(pdparam)
-
-        a0 = self.pd.sample()
-        a1 = self.pd.mode()
-        neglogp0 = self.pd.neglogp(a0)
-
-        def step(ob, *_args, **_kwargs):
-            a, v, neglogp = sess.run([a0, vf, neglogp0], {X:ob})
-            a = np.clip(a, -2, 2)
-            return a, v, neglogp
-
-        def value(ob, *_args, **_kwargs):
-            return sess.run(vf, {X:ob})
-
-        def step_max(ob, *_args, **_kwargs):
-            a, v, neglogp = sess.run([a1, vf, neglogp0], {X:ob})
-            # a = np.clip(a, -1, 1)
-            return a, v, neglogp
-
-        self.X = X
-        self.is_training = is_training
-        self.A = A
-        self.pi = pi
-        self.std = self.pd.std
-        self.vf = vf
-        self.step = step
-        self.step_max = step_max
-        self.value = value
-        self.mean = a1
-
-
-
-class MlpPolicy_Goal(object):
     def create_obs_feature_net(self, obs, is_training, units=[128, 64], reuse=False, act = tf.nn.relu, use_bn = False):
         with tf.variable_scope('obs_feature', reuse=reuse):    
             for i in range(len(units)):
@@ -425,7 +342,17 @@ class MlpPolicy_Goal(object):
                 with tf.variable_scope('expected_ir', reuse=reuse):   
                     h_eir = self.create_obs_feature_net(X, is_training, units=[128, 64, 64], reuse=False, use_bn = False)
                     self.expected_ir = self.dense_layer(h_eir, 1, None)
-                    expected_ir_clip = tf.clip_by_value(self.expected_ir, 0, 100000)
+                    expected_ir_clip = tf.clip_by_value(self.expected_ir, 0, 1000)
+
+                #     r_p_mu = self.dense_layer(h_eir, 1, None)
+                #     r_p_phi = self.dense_layer(h_eir, 1, None)
+
+                # r_p_sigma = tf.square(r_p_phi)
+                # self.r_p_dist = tf.contrib.distributions.Normal(loc=r_p_mu, scale=r_p_sigma)
+
+                # self.expected_ir = r_p_mu + tf.square(r_p_sigma) * 3
+                # expected_ir_clip = tf.clip_by_value(self.expected_ir, 0, 15)
+
 
         pdparam = tf.concat([pi, pi * 0.0 + logstd], axis=1)
 
@@ -466,7 +393,7 @@ class MlpPolicy_Goal(object):
             return sess.run(p_error, {X:ob, A:a, X_NEXT:ob_})
 
         def get_expected_ir(ob, *_args, **_kwargs):
-            return sess.run(expected_ir_clip, {X:ob})
+            return sess.run(self.expected_ir, {X:ob})
 
         self.X = X
         self.X_NEXT = X_NEXT
